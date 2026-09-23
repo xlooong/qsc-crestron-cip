@@ -1,0 +1,1067 @@
+--==============================================================================
+-- Crestron CIP Protocol Gateway for Q-SYS
+-- Communicates with Crestron control system via CIP (TCP port 41794)
+-- Configurable IP, IPID, and signal counts via properties
+--==============================================================================
+
+PluginInfo = {
+  Name = "wxl_personal_plug~crestronCIP",
+  Version = "1.0.0",
+  Author = "longwang",
+  Id = "b7e8a2c1-3d4f-4a6e-9c2d-8f1e5b7a3c9d",
+  Description = "Crestron CIP protocol gateway with configurable signal counts"
+}
+
+-- Color palette
+Palette = {
+  Blue    = {46, 63, 87},
+  White   = {255, 255, 255},
+  Black   = {0, 0, 0},
+  Red     = {220, 60, 60},
+  Green   = {60, 180, 60},
+  Orange  = {230, 140, 30},
+  Gray    = {160, 160, 160},
+}
+
+-- Build dynamic page list based on configured signal counts
+-- Each signal page holds max 50 pairs (In + Out)
+local SIGNALS_PER_PAGE = 50
+
+function BuildPageList(props)
+  local pages = {{ name = "Connection", ptype = "connection" }}
+  local digCount = math.floor(props["digital_count"].Value)
+  local anaCount = math.floor(props["analog_count"].Value)
+  local serCount = math.floor(props["serial_count"].Value)
+
+  local function addSignalPages(label, count, ptype)
+    local numPages = math.ceil(count / SIGNALS_PER_PAGE)
+    for p = 1, numPages do
+      local startIdx = (p - 1) * SIGNALS_PER_PAGE + 1
+      local endIdx = math.min(p * SIGNALS_PER_PAGE, count)
+      table.insert(pages, {
+        name = string.format("%s %d-%d", label, startIdx, endIdx),
+        ptype = ptype,
+        startIdx = startIdx,
+        endIdx = endIdx
+      })
+    end
+  end
+
+  addSignalPages("Digital", digCount, "digital")
+  addSignalPages("Analog", anaCount, "analog")
+  addSignalPages("Serial", serCount, "serial")
+  return pages
+end
+
+function GetPages(props)
+  local pages = BuildPageList(props)
+  local result = {}
+  for _, p in ipairs(pages) do
+    table.insert(result, { name = p.name })
+  end
+  return result
+end
+
+function GetProperties()
+  local props = {}
+
+  -- Crestron device IP address
+  table.insert(props, {
+    Name = "cip_ip",
+    Type = "string",
+    Value = "192.168.1.100"
+  })
+
+  -- Device IPID (hex string, 03-FF)
+  table.insert(props, {
+    Name = "cip_ipid",
+    Type = "string",
+    Value = "03"
+  })
+
+  -- Digital signal count
+  table.insert(props, {
+    Name = "digital_count",
+    Type = "double",
+    Min = 0,
+    Max = 500,
+    Value = 32
+  })
+
+  -- Analog signal count
+  table.insert(props, {
+    Name = "analog_count",
+    Type = "double",
+    Min = 0,
+    Max = 500,
+    Value = 32
+  })
+
+  -- Serial signal count
+  table.insert(props, {
+    Name = "serial_count",
+    Type = "double",
+    Min = 0,
+    Max = 500,
+    Value = 32
+  })
+
+  -- Debug TCP client: remote log server IP
+  table.insert(props, {
+    Name = "debug_server_ip",
+    Type = "string",
+    Value = "192.168.1.100"
+  })
+
+  -- Debug TCP client: remote log server port
+  table.insert(props, {
+    Name = "debug_server_port",
+    Type = "double",
+    Min = 1,
+    Max = 65535,
+    Value = 10001
+  })
+
+  return props
+end
+
+function RectifyProperties(props)
+  return props
+end
+
+function GetComponents(props)
+  return {}
+end
+
+function GetPins(props)
+  return {}
+end
+
+function GetColor(props)
+  return Palette.Blue
+end
+
+function GetPrettyName(props)
+  return "crestronCIP"
+end
+
+-- Define controls
+function GetControls(props)
+  local ctrls = {}
+  local digCount = math.floor(props["digital_count"].Value)
+  local anaCount = math.floor(props["analog_count"].Value)
+  local serCount = math.floor(props["serial_count"].Value)
+
+  -- IP address input (panel override)
+  table.insert(ctrls, {
+    Name = "IP_Input",
+    ControlType = "Text",
+    DefaultValue = props["cip_ip"].Value,
+    PinStyle = "Input",
+    UserPin = false,
+    Count = 1
+  })
+
+  -- IPID input (panel override, hex string e.g. "03")
+  table.insert(ctrls, {
+    Name = "IPID_Input",
+    ControlType = "Text",
+    DefaultValue = props["cip_ipid"].Value,
+    PinStyle = "Input",
+    UserPin = false,
+    Count = 1
+  })
+
+  -- Connect / disconnect toggle
+  table.insert(ctrls, {
+    Name = "CIP_Connect",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    DefaultValue = false,
+    PinStyle = "Input",
+    UserPin = true,
+    Count = 1
+  })
+
+  -- Connection status indicator
+  table.insert(ctrls, {
+    Name = "CIP_Status",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    DefaultValue = false,
+    PinStyle = "Output",
+    UserPin = true,
+    Count = 1
+  })
+
+  -- Debug: log server IP input
+  table.insert(ctrls, {
+    Name = "Debug_Server_IP",
+    ControlType = "Text",
+    DefaultValue = props["debug_server_ip"].Value,
+    PinStyle = "Input",
+    UserPin = false,
+    Count = 1
+  })
+
+  -- Debug: log server port input
+  table.insert(ctrls, {
+    Name = "Debug_Server_Port",
+    ControlType = "Text",
+    DefaultValue = tostring(math.floor(props["debug_server_port"].Value)),
+    PinStyle = "Input",
+    UserPin = false,
+    Count = 1
+  })
+
+  -- Debug: connect / disconnect toggle
+  table.insert(ctrls, {
+    Name = "Debug_Connect",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    DefaultValue = false,
+    PinStyle = "Input",
+    UserPin = true,
+    Count = 1
+  })
+
+  -- Debug: connection status indicator
+  table.insert(ctrls, {
+    Name = "Debug_Status",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    DefaultValue = false,
+    PinStyle = "Output",
+    UserPin = true,
+    Count = 1
+  })
+
+  -- Digital inputs (from Crestron to Q-SYS) - individual controls for pin visibility
+  for i = 1, digCount do
+    table.insert(ctrls, {
+      Name = "Digital_In_" .. i,
+      ControlType = "Button",
+      ButtonType = "Toggle",
+      DefaultValue = false,
+      PinStyle = "Output",
+      UserPin = true,
+      Count = 1
+    })
+  end
+
+  -- Digital outputs (from Q-SYS to Crestron)
+  for i = 1, digCount do
+    table.insert(ctrls, {
+      Name = "Digital_Out_" .. i,
+      ControlType = "Button",
+      ButtonType = "Toggle",
+      DefaultValue = false,
+      PinStyle = "Input",
+      UserPin = true,
+      Count = 1
+    })
+  end
+
+  -- Analog inputs (from Crestron to Q-SYS)
+  for i = 1, anaCount do
+    table.insert(ctrls, {
+      Name = "Analog_In_" .. i,
+      ControlType = "Knob",
+      ControlUnit = "Integer",
+      Min = 0,
+      Max = 65535,
+      DefaultValue = 0,
+      PinStyle = "Output",
+      UserPin = true,
+      Count = 1
+    })
+  end
+
+  -- Analog outputs (from Q-SYS to Crestron)
+  for i = 1, anaCount do
+    table.insert(ctrls, {
+      Name = "Analog_Out_" .. i,
+      ControlType = "Knob",
+      ControlUnit = "Integer",
+      Min = 0,
+      Max = 65535,
+      DefaultValue = 0,
+      PinStyle = "Input",
+      UserPin = true,
+      Count = 1
+    })
+  end
+
+  -- Serial inputs (from Crestron to Q-SYS)
+  for i = 1, serCount do
+    table.insert(ctrls, {
+      Name = "Serial_In_" .. i,
+      ControlType = "Text",
+      DefaultValue = "",
+      PinStyle = "Output",
+      UserPin = true,
+      Count = 1
+    })
+  end
+
+  -- Serial outputs (from Q-SYS to Crestron)
+  for i = 1, serCount do
+    table.insert(ctrls, {
+      Name = "Serial_Out_" .. i,
+      ControlType = "Text",
+      DefaultValue = "",
+      PinStyle = "Input",
+      UserPin = true,
+      Count = 1
+    })
+  end
+
+  return ctrls
+end
+
+-- Define panel layout
+function GetControlLayout(props)
+  local layout = {}
+  local graphics = {}
+  local pages = BuildPageList(props)
+  local CurrentPage = pages[props["page_index"].Value]
+
+  -- Helper: render a signal page (Digital / Analog / Serial)
+  local function renderSignalPage(pageInfo, signalType)
+    local fs = 10
+    local rowH = 24
+    local y = 28
+
+    -- Title
+    table.insert(graphics, {
+      Type = "Text",
+      Text = pageInfo.name,
+      FontSize = 14,
+      HTextAlign = "Left",
+      Position = {8, 4},
+      Size = {300, 20}
+    })
+
+    -- Column headers
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "In (from Crestron)",
+      FontSize = fs,
+      HTextAlign = "Center",
+      Position = {34, y},
+      Size = {124, 16}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Out (to Crestron)",
+      FontSize = fs,
+      HTextAlign = "Center",
+      Position = {196, y},
+      Size = {124, 16}
+    })
+    y = y + 20
+
+    for i = pageInfo.startIdx, pageInfo.endIdx do
+      local inName = signalType .. "_In_" .. i
+      local outName = signalType .. "_Out_" .. i
+      local numLabel = tostring(i)
+
+      -- Number label for In
+      table.insert(graphics, {
+        Type = "Text",
+        Text = numLabel,
+        FontSize = fs,
+        HTextAlign = "Right",
+        Position = {8, y + 2},
+        Size = {22, rowH - 4}
+      })
+
+      -- In control
+      local inLayout = {
+        PrettyName = signalType .. " In " .. i,
+        Style = (signalType == "Digital" and "Button" or (signalType == "Analog" and "Fader" or "Text")),
+        Margin = 1,
+        Position = {34, y},
+        Size = {124, rowH - 2}
+      }
+      if signalType == "Digital" then
+        inLayout.ButtonStyle = "Toggle"
+        inLayout.Color = Palette.Green
+      elseif signalType == "Serial" then
+        inLayout.FontSize = 9
+        inLayout.HTextAlign = "Left"
+      end
+      layout[inName] = inLayout
+
+      -- Number label for Out
+      table.insert(graphics, {
+        Type = "Text",
+        Text = numLabel,
+        FontSize = fs,
+        HTextAlign = "Right",
+        Position = {170, y + 2},
+        Size = {22, rowH - 4}
+      })
+
+      -- Out control
+      local outLayout = {
+        PrettyName = signalType .. " Out " .. i,
+        Style = (signalType == "Digital" and "Button" or (signalType == "Analog" and "Fader" or "Text")),
+        Margin = 1,
+        Position = {196, y},
+        Size = {124, rowH - 2}
+      }
+      if signalType == "Digital" then
+        outLayout.ButtonStyle = "Toggle"
+        outLayout.Color = Palette.Red
+      elseif signalType == "Serial" then
+        outLayout.FontSize = 9
+        outLayout.HTextAlign = "Left"
+      end
+      layout[outName] = outLayout
+
+      y = y + rowH
+    end
+  end
+
+  if CurrentPage.ptype == "connection" then
+
+    local fs = 12
+
+    -- Title
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "crestronCIP",
+      FontSize = 14,
+      HTextAlign = "Left",
+      Position = {8, 4},
+      Size = {200, 20}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "v" .. PluginInfo.Version,
+      FontSize = fs,
+      HTextAlign = "Right",
+      Position = {268, 6},
+      Size = {64, 18}
+    })
+
+    -- IP Address
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "IP Address:",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {8, 32},
+      Size = {80, 20}
+    })
+    layout["IP_Input"] = {
+      PrettyName = "IP Address",
+      Style = "Text",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {92, 30},
+      Size = {240, 24}
+    }
+
+    -- IPID input
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "IPID (hex):",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {8, 62},
+      Size = {80, 20}
+    })
+    layout["IPID_Input"] = {
+      PrettyName = "IPID",
+      Style = "Text",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {92, 60},
+      Size = {80, 24}
+    }
+
+    -- Connect button
+    layout["CIP_Connect"] = {
+      PrettyName = "Connect",
+      Legend = "Connect",
+      Style = "Button",
+      ButtonStyle = "Toggle",
+      Color = Palette.Green,
+      Margin = 2,
+      Position = {8, 90},
+      Size = {100, 30}
+    }
+
+    -- Status indicator
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Status:",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {124, 96},
+      Size = {50, 20}
+    })
+    layout["CIP_Status"] = {
+      PrettyName = "Connection Status",
+      Legend = "",
+      Style = "Button",
+      ButtonStyle = "Toggle",
+      Color = Palette.Green,
+      Margin = 2,
+      Position = {172, 92},
+      Size = {40, 26}
+    }
+
+    -- Config info
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Digital: " .. math.floor(props["digital_count"].Value) ..
+             "  Analog: " .. math.floor(props["analog_count"].Value) ..
+             "  Serial: " .. math.floor(props["serial_count"].Value),
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {8, 130},
+      Size = {324, 20}
+    })
+
+    -- Debug log server section
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Text = "Debug Log Server",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Fill = Palette.White,
+      StrokeColor = Palette.Black,
+      StrokeWidth = 1,
+      CornerRadius = 6,
+      Position = {8, 155},
+      Size = {324, 95}
+    })
+    -- Server IP
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Server IP:",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {14, 173},
+      Size = {70, 20}
+    })
+    layout["Debug_Server_IP"] = {
+      PrettyName = "Debug Server IP",
+      Style = "Text",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {86, 171},
+      Size = {150, 24}
+    }
+    -- Server Port
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Port:",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {244, 173},
+      Size = {36, 20}
+    })
+    layout["Debug_Server_Port"] = {
+      PrettyName = "Debug Server Port",
+      Style = "Text",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {282, 171},
+      Size = {44, 24}
+    }
+    -- Debug Connect button
+    layout["Debug_Connect"] = {
+      PrettyName = "Debug Connect",
+      Legend = "Connect",
+      Style = "Button",
+      ButtonStyle = "Toggle",
+      Color = Palette.Blue,
+      Margin = 2,
+      Position = {14, 205},
+      Size = {100, 30}
+    }
+    -- Debug Status
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Status:",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {130, 211},
+      Size = {50, 20}
+    })
+    layout["Debug_Status"] = {
+      PrettyName = "Debug Status",
+      Legend = "",
+      Style = "Button",
+      ButtonStyle = "Toggle",
+      Color = Palette.Green,
+      Margin = 2,
+      Position = {178, 207},
+      Size = {40, 26}
+    }
+
+    -- Properties Notes
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Text = "Properties Notes",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Fill = Palette.White,
+      StrokeColor = Palette.Black,
+      StrokeWidth = 1,
+      CornerRadius = 6,
+      Position = {8, 260},
+      Size = {324, 114}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "cip_ip: default IP (panel IP_Input overrides)",
+      FontSize = 9,
+      HTextAlign = "Left",
+      Position = {14, 278},
+      Size = {312, 14}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "cip_ipid: hex 03-FF, default 03",
+      FontSize = 9,
+      HTextAlign = "Left",
+      Position = {14, 292},
+      Size = {312, 14}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "digital/analog/serial_count: 0-500, 50 per page",
+      FontSize = 9,
+      HTextAlign = "Left",
+      Position = {14, 306},
+      Size = {312, 14}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Signal pins: Digital_In/Out, Analog_In/Out, Serial_In/Out",
+      FontSize = 9,
+      HTextAlign = "Left",
+      Position = {14, 320},
+      Size = {312, 14}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Analog range: 0-65535 (16-bit unsigned)",
+      FontSize = 9,
+      HTextAlign = "Left",
+      Position = {14, 334},
+      Size = {312, 14}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "debug_server_ip/port: remote log server (TCP client mode)",
+      FontSize = 9,
+      HTextAlign = "Left",
+      Position = {14, 348},
+      Size = {312, 14}
+    })
+
+  elseif CurrentPage.ptype == "digital" then
+    renderSignalPage(CurrentPage, "Digital")
+  elseif CurrentPage.ptype == "analog" then
+    renderSignalPage(CurrentPage, "Analog")
+  elseif CurrentPage.ptype == "serial" then
+    renderSignalPage(CurrentPage, "Serial")
+  end
+
+  return layout, graphics
+end
+
+--==============================================================================
+-- Runtime logic (executes on Core)
+--==============================================================================
+if Controls then
+
+  -- Load configuration from properties
+  local MAX_DIGITAL = math.floor(Properties["digital_count"].Value)
+  local MAX_ANALOG  = math.floor(Properties["analog_count"].Value)
+  local MAX_SERIAL  = math.floor(Properties["serial_count"].Value)
+  local CIP_PORT    = 41794
+
+  -- Global state variables
+  local tcp          = nil
+  local pollTimer    = Timer.New()
+  local hbTimer      = Timer.New()
+  local isConnected  = false
+  local isRegistered = false
+  local rxBuffer     = ""
+
+  -- Debug TCP Client: connects to user's log server
+  local debugSocket = TcpSocket.New()
+
+  local function getDebugServerIP()
+    if Controls.Debug_Server_IP ~= nil and Controls.Debug_Server_IP.String ~= "" then
+      return Controls.Debug_Server_IP.String
+    end
+    return Properties["debug_server_ip"].Value
+  end
+
+  local function getDebugServerPort()
+    if Controls.Debug_Server_Port ~= nil and Controls.Debug_Server_Port.String ~= "" then
+      local p = tonumber(Controls.Debug_Server_Port.String)
+      if p then return math.floor(p) end
+    end
+    return math.floor(Properties["debug_server_port"].Value)
+  end
+
+  debugSocket.EventHandler = function(sock, event)
+    if event == "CONNECTED" then
+      if Controls.Debug_Status then Controls.Debug_Status.Boolean = true end
+      if Controls.Debug_Connect then Controls.Debug_Connect.Boolean = true end
+      print("[Debug] Connected to log server " .. getDebugServerIP() .. ":" .. getDebugServerPort())
+    elseif event == "CLOSED" then
+      if Controls.Debug_Status then Controls.Debug_Status.Boolean = false end
+      if Controls.Debug_Connect then Controls.Debug_Connect.Boolean = false end
+      print("[Debug] Log server connection closed")
+    elseif event == "ERROR" then
+      if Controls.Debug_Status then Controls.Debug_Status.Boolean = false end
+      if Controls.Debug_Connect then Controls.Debug_Connect.Boolean = false end
+      print("[Debug] Log server connection error")
+    elseif event == "DATA" then
+      sock:Read(4096)
+    end
+  end
+
+  -- Debug connect button
+  Controls.Debug_Connect.EventHandler = function(c)
+    if c.Boolean then
+      debugSocket:Connect(getDebugServerIP(), getDebugServerPort())
+    else
+      debugSocket:Disconnect()
+    end
+  end
+
+  -- Override print to also send to log server
+  local originalPrint = print
+  print = function(...)
+    local args = {...}
+    local parts = {}
+    for _, v in ipairs(args) do
+      table.insert(parts, tostring(v))
+    end
+    local msg = table.concat(parts, "\t")
+    originalPrint(msg)
+    if debugSocket and debugSocket.IsConnected then
+      pcall(function() debugSocket:Write(msg .. "\r\n") end)
+    end
+  end
+
+  print("[Debug] TCP log client ready, connect via panel to start")
+
+  -- Helper: convert binary string to hex (replaces Python binascii.hexlify)
+  local function toHex(str)
+    local hex = ""
+    for i = 1, #str do
+      hex = hex .. string.format("%02X ", str:byte(i))
+    end
+    return hex
+  end
+
+  -- Get target IP: panel input overrides property default
+  local function getTargetIP()
+    if Controls.IP_Input ~= nil and Controls.IP_Input.String ~= "" then
+      return Controls.IP_Input.String
+    end
+    print("[CIP] IP_Input empty, using property default: " .. Properties["cip_ip"].Value)
+    return Properties["cip_ip"].Value
+  end
+
+  -- Get target IPID: panel input overrides property default (hex string)
+  local function getTargetIPID()
+    if Controls.IPID_Input ~= nil and Controls.IPID_Input.String ~= "" then
+      local val = tonumber(Controls.IPID_Input.String, 16)
+      if val then return val end
+    end
+    return tonumber(Properties["cip_ipid"].Value, 16) or 3
+  end
+
+  -- Initialize control states
+  local function initControls()
+    if Controls.CIP_Status then
+      Controls.CIP_Status.Boolean = false
+    end
+    if Controls.CIP_Connect then
+      Controls.CIP_Connect.Boolean = false
+    end
+    print("[CIP] Controls initialized")
+  end
+
+  -- TCP socket initialization
+  local function initTcpSocket()
+    if tcp ~= nil then
+      tcp:Disconnect()
+      tcp = nil
+    end
+    tcp = TcpSocket.New()
+    tcp.EventHandler = function(s, eventType)
+      print("[TCP] Event: " .. eventType)
+      if eventType == "CONNECTED" then
+        isConnected = true
+        if Controls.CIP_Status then Controls.CIP_Status.Boolean = true end
+        if Controls.CIP_Connect then Controls.CIP_Connect.Boolean = true end
+        print("[TCP] Connected to " .. getTargetIP())
+        sendRegistration()
+        hbTimer:Start(15)
+        pollTimer:Start(0.05)
+      elseif eventType == "CLOSED" then
+        isConnected = false
+        isRegistered = false
+        initControls()
+        hbTimer:Stop()
+        pollTimer:Stop()
+        print("[TCP] Connection closed")
+      elseif eventType == "ERROR" then
+        isConnected = false
+        isRegistered = false
+        initControls()
+        hbTimer:Stop()
+        pollTimer:Stop()
+        print("[TCP] Connection error - check IP/network/Crestron service")
+      end
+    end
+  end
+
+  -- Send IPID registration packet
+  function sendRegistration()
+    if not tcp or not isConnected then return end
+    local ipid = getTargetIPID()
+    local pkt = string.char(0x01,0x00,0x0B,0x00,0x00,0x00,0x00,0x00,ipid,0x40,0xFF,0xFF,0xF1,0x01)
+    tcp:Write(pkt)
+    print("[CIP] Sent IPID registration (IPID=0x" .. string.format("%02X", ipid) .. ")")
+  end
+
+  -- Send heartbeat
+  function sendHeartbeat()
+    if isConnected and tcp then
+      tcp:Write(string.char(0x0D,0x00,0x02,0x00,0x00))
+    end
+  end
+
+  -- Send digital join
+  function sendDigital(join, value)
+    if not isRegistered or not tcp or join < 1 or join > MAX_DIGITAL then return end
+    join = join - 1
+    local jh = math.floor(join / 256)
+    local jl = join % 256
+    local flag = value and 0x00 or 0x80
+    tcp:Write(string.char(0x05,0x00,0x06,0x00,0x00,0x03,0x00,jl,jh+flag))
+  end
+
+  -- Send analog join
+  function sendAnalog(join, value)
+    if not isRegistered or not tcp or join < 1 or join > MAX_ANALOG then return end
+    join = join - 1
+    value = math.min(math.max(tonumber(value) or 0, 0), 65535)
+    local jh = math.floor(join / 256)
+    local jl = join % 256
+    local vh = math.floor(value / 256)
+    local vl = value % 256
+    tcp:Write(string.char(0x05,0x00,0x08,0x00,0x00,0x05,0x14,jh,jl,vh,vl))
+  end
+
+  -- Send serial join
+  function sendString(join, str)
+    if not isRegistered or not tcp or join < 1 or join > MAX_SERIAL then return end
+    join = join - 1
+    local s = tostring(str)
+    local len = #s
+    local payloadLen = 8 + len
+    local lenH = math.floor(payloadLen / 256)
+    local lenL = payloadLen % 256
+    local jh = math.floor(join / 256)
+    local jl = join % 256
+    local pkt = string.char(0x12,lenH,lenL,0,0,0,4+len,0x34,jh,jl,0x03) .. s
+    tcp:Write(pkt)
+    print("[CIP] Sent serial " .. (join+1) .. ": " .. s)
+  end
+
+  -- Parse incoming CIP packet
+  function parsePacket(pkt)
+    local pktLen = #pkt
+    if pktLen < 4 then
+      print("[CIP] Packet too short (<4 bytes), skipped")
+      return
+    end
+    local typ = pkt:byte(1)
+    local lenH = pkt:byte(2)
+    local lenL = pkt:byte(3)
+    local payloadLen = lenH * 256 + lenL
+    local payload = pkt:sub(4)
+
+    -- Log all non-heartbeat packets for debugging
+    if typ ~= 0x0D and typ ~= 0x0E then
+      print("[CIP] RX type=0x" .. string.format("%02X", typ) ..
+            " payloadLen=" .. payloadLen .. " hex: " .. toHex(pkt))
+    end
+
+    -- 1. IPID registration response
+    if typ == 0x02 and payloadLen == 4 then
+      if payload == "\x00\x00\x00\x1F" then
+        isRegistered = true
+        print("[CIP] IPID registration successful")
+        tcp:Write(string.char(0x05,0x00,0x05,0x00,0x00,0x02,0x03,0x00))
+      else
+        print("[CIP] IPID registration failed, response: " .. toHex(payload))
+      end
+      return
+    end
+
+    -- 2. CIP sync complete
+    if typ == 0x05 and payloadLen >= 5 and payload:byte(4) == 0x1C then
+      print("[CIP] Crestron sync complete, sending final ack")
+      tcp:Write(string.char(0x05,0x00,0x05,0x00,0x00,0x02,0x03,0x1D))
+      return
+    end
+
+    -- 3. Receive digital
+    if typ == 0x05 and payloadLen >= 6 and payload:byte(4) == 0x00 then
+      local jl = payload:byte(5)
+      local jh = payload:byte(6)
+      if not jh or not jl then
+        print("[CIP] Digital byte nil, skipped")
+        return
+      end
+      local join = ((jh & 0x7F) * 256 + jl) + 1
+      if join < 1 or join > MAX_DIGITAL then
+        print("[CIP] Digital join out of range: " .. join .. ", skipped")
+        return
+      end
+      local value = (jh & 0x80) == 0
+      local ctrl = Controls["Digital_In_" .. join]
+      if ctrl then ctrl.Boolean = value end
+      return
+    end
+
+    -- 4. Receive analog
+    if typ == 0x05 and payloadLen >= 8 and payload:byte(4) == 0x14 then
+      local jh = payload:byte(5)
+      local jl = payload:byte(6)
+      local vh = payload:byte(7)
+      local vl = payload:byte(8)
+      if not jh or not jl or not vh or not vl then
+        print("[CIP] Analog byte nil, skipped")
+        return
+      end
+      local join = jh * 256 + jl + 1
+      if join < 1 or join > MAX_ANALOG then
+        print("[CIP] Analog join out of range: " .. join .. ", skipped")
+        return
+      end
+      local value = vh * 256 + vl
+      local ctrl = Controls["Analog_In_" .. join]
+      if ctrl then ctrl.Value = value end
+      return
+    end
+
+    -- 5. Receive serial
+    if typ == 0x12 and payloadLen >= 8 then
+      local jh = payload:byte(6)
+      local jl = payload:byte(7)
+      if not jh or not jl then
+        print("[CIP] Serial byte nil, skipped")
+        return
+      end
+      local join = jh * 256 + jl + 1
+      if join < 1 or join > MAX_SERIAL then
+        print("[CIP] Serial join out of range: " .. join .. ", skipped")
+        return
+      end
+      local str = payload:sub(9):gsub("[%z%c]", "")
+      local ctrl = Controls["Serial_In_" .. join]
+      if ctrl then ctrl.String = str end
+      print("[CIP] Received serial " .. join .. ": " .. str)
+      return
+    end
+
+    -- 6. Heartbeat response
+    if typ == 0x0D or typ == 0x0E then
+      return
+    end
+
+    -- Unhandled packet
+    print("[CIP] Unhandled packet type: 0x" .. string.format("%02X", typ) ..
+          ", totalLen: " .. pktLen .. ", payloadLen: " .. payloadLen ..
+          ", hex: " .. toHex(pkt))
+  end
+
+  -- Data receive polling (handles sticky packets)
+  pollTimer.EventHandler = function()
+    if not isConnected or not tcp then return end
+    local data = tcp:Read(4096)
+    if data then
+      rxBuffer = rxBuffer .. data
+    end
+    while #rxBuffer >= 4 do
+      local lenH = rxBuffer:byte(2)
+      local lenL = rxBuffer:byte(3)
+      local totalLen = 3 + (lenH * 256 + lenL)
+      if #rxBuffer < totalLen then
+        break
+      end
+      parsePacket(rxBuffer:sub(1, totalLen))
+      rxBuffer = rxBuffer:sub(totalLen + 1)
+    end
+  end
+
+  -- Connect button event
+  Controls.CIP_Connect.EventHandler = function(c)
+    if c.Boolean then
+      initTcpSocket()
+      tcp:Connect(getTargetIP(), CIP_PORT)
+    else
+      if tcp then
+        tcp:Disconnect()
+      end
+    end
+  end
+
+  -- Bind digital outputs
+  for i = 1, MAX_DIGITAL do
+    local ctrl = Controls["Digital_Out_" .. i]
+    if ctrl then
+      ctrl.EventHandler = function(c)
+        sendDigital(i, c.Boolean)
+      end
+    end
+  end
+
+  -- Bind analog outputs
+  for i = 1, MAX_ANALOG do
+    local ctrl = Controls["Analog_Out_" .. i]
+    if ctrl then
+      ctrl.EventHandler = function(c)
+        sendAnalog(i, c.Value)
+      end
+    end
+  end
+
+  -- Bind serial outputs
+  for i = 1, MAX_SERIAL do
+    local ctrl = Controls["Serial_Out_" .. i]
+    if ctrl then
+      ctrl.EventHandler = function(c)
+        sendString(i, c.String)
+      end
+    end
+  end
+
+  -- Startup
+  initControls()
+  hbTimer.EventHandler = sendHeartbeat
+  print("==================================")
+  print("crestronCIP gateway started")
+  print("Digital: " .. MAX_DIGITAL .. " | Analog: " .. MAX_ANALOG .. " | Serial: " .. MAX_SERIAL)
+  print("IPID: 0x" .. string.format("%02X", getTargetIPID()))
+  print("==================================")
+
+end
