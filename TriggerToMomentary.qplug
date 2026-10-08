@@ -1,0 +1,501 @@
+--==============================================================================
+-- TriggerToMomentary
+-- Converts trigger button inputs to momentary (pulsed) outputs.
+-- Each trigger fires its corresponding output true for a configurable duration.
+-- Retriggerable: re-firing while active resets the timer.
+--==============================================================================
+
+PluginInfo = {
+  Name = "wxl_personal_plug~TriggerToMomentary",
+  Version = "1.0.0",
+  Author = "longwang",
+  Id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  Description = "Convert trigger inputs to momentary pulsed outputs with configurable duration"
+}
+
+Palette = {
+  Blue    = {46, 63, 87},
+  White   = {255, 255, 255},
+  Black   = {0, 0, 0},
+  Red     = {220, 60, 60},
+  Green   = {60, 180, 60},
+  Orange  = {230, 140, 30},
+  Gray    = {160, 160, 160},
+}
+
+local SIGNALS_PER_PAGE = 50
+
+function BuildPageList(props)
+  local pages = {{ name = "Config", ptype = "config" }}
+  local count = math.floor(props["trigger_count"].Value)
+  local numPages = math.ceil(count / SIGNALS_PER_PAGE)
+  for p = 1, numPages do
+    local startIdx = (p - 1) * SIGNALS_PER_PAGE + 1
+    local endIdx = math.min(p * SIGNALS_PER_PAGE, count)
+    table.insert(pages, {
+      name = string.format("Signals %d-%d", startIdx, endIdx),
+      ptype = "signals",
+      startIdx = startIdx,
+      endIdx = endIdx
+    })
+  end
+  return pages
+end
+
+function GetPages(props)
+  local pages = BuildPageList(props)
+  local result = {}
+  for _, p in ipairs(pages) do
+    table.insert(result, { name = p.name })
+  end
+  return result
+end
+
+function GetProperties()
+  local props = {}
+  table.insert(props, {
+    Name = "trigger_count",
+    Type = "double",
+    Min = 0,
+    Max = 500,
+    Value = 32
+  })
+  table.insert(props, {
+    Name = "momentary_duration",
+    Type = "double",
+    Min = 0.1,
+    Max = 10.0,
+    Value = 0.5
+  })
+  return props
+end
+
+function RectifyProperties(props)
+  return props
+end
+
+function GetComponents(props)
+  return {}
+end
+
+function GetPins(props)
+  return {}
+end
+
+function GetColor(props)
+  return Palette.Blue
+end
+
+function GetPrettyName(props)
+  return "TriggerToMomentary"
+end
+
+function GetControls(props)
+  local ctrls = {}
+  local count = math.floor(props["trigger_count"].Value)
+
+  -- Duration override on panel
+  table.insert(ctrls, {
+    Name = "Duration_Input",
+    ControlType = "Knob",
+    ControlUnit = "Integer",
+    Min = 1,
+    Max = 100,
+    DefaultValue = math.floor(props["momentary_duration"].Value * 10),
+    PinStyle = "Input",
+    UserPin = false,
+    Count = 1
+  })
+
+  -- Active count display
+  table.insert(ctrls, {
+    Name = "Active_Count",
+    ControlType = "Text",
+    DefaultValue = "0",
+    UserPin = false,
+    Count = 1
+  })
+
+  -- Trigger inputs (Trigger type for trigger pins, rising edge fires)
+  for i = 1, count do
+    table.insert(ctrls, {
+      Name = "Trigger_In_" .. i,
+      ControlType = "Button",
+      ButtonType = "Trigger",
+      DefaultValue = false,
+      PinStyle = "Input",
+      UserPin = true,
+      Count = 1
+    })
+  end
+
+  -- Momentary outputs
+  for i = 1, count do
+    table.insert(ctrls, {
+      Name = "Momentary_Out_" .. i,
+      ControlType = "Button",
+      ButtonType = "Toggle",
+      DefaultValue = false,
+      PinStyle = "Output",
+      UserPin = true,
+      Count = 1
+    })
+  end
+
+  return ctrls
+end
+
+function GetControlLayout(props)
+  local layout = {}
+  local graphics = {}
+  local pages = BuildPageList(props)
+  local CurrentPage = pages[props["page_index"].Value]
+  local count = math.floor(props["trigger_count"].Value)
+
+  if CurrentPage.ptype == "config" then
+    local fs = 12
+
+    -- Title
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "TriggerToMomentary",
+      FontSize = 14,
+      HTextAlign = "Left",
+      Position = {8, 4},
+      Size = {240, 20}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "v" .. PluginInfo.Version,
+      FontSize = fs,
+      HTextAlign = "Right",
+      Position = {268, 6},
+      Size = {64, 18}
+    })
+
+    -- Duration knob (0.1s units, displayed as seconds)
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Duration (s):",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {8, 34},
+      Size = {100, 20}
+    })
+    layout["Duration_Input"] = {
+      PrettyName = "Duration",
+      Style = "Knob",
+      Margin = 2,
+      Position = {112, 30},
+      Size = {120, 28}
+    }
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "0.1 - 10.0s",
+      FontSize = 9,
+      HTextAlign = "Left",
+      Position = {240, 36},
+      Size = {90, 18}
+    })
+
+    -- Active count
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Active outputs:",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {8, 68},
+      Size = {110, 20}
+    })
+    layout["Active_Count"] = {
+      PrettyName = "Active Count",
+      Style = "Text",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {122, 66},
+      Size = {60, 24}
+    }
+
+    -- Channel count
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Channels: " .. count,
+      FontSize = fs,
+      HTextAlign = "Left",
+      Position = {8, 98},
+      Size = {200, 20}
+    })
+
+    -- Notes GroupBox
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Text = "Notes / 说明",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Fill = Palette.White,
+      StrokeColor = Palette.Black,
+      StrokeWidth = 1,
+      CornerRadius = 6,
+      Position = {8, 128},
+      Size = {324, 510}
+    })
+    local ny = 144
+    local nl = 13
+    local function addNote(text)
+      table.insert(graphics, {
+        Type = "Text",
+        Text = text,
+        FontSize = 8,
+        HTextAlign = "Left",
+        Position = {14, ny},
+        Size = {312, nl}
+      })
+      ny = ny + nl
+    end
+
+    addNote("TriggerToMomentary v1.0.0 / 触发器转瞬时输出")
+    addNote("Converts trigger inputs to momentary (pulsed) outputs.")
+    addNote("将触发按钮输入转换为瞬时（脉冲）输出。")
+    addNote("")
+    addNote("Properties / 属性参数:")
+    addNote("  trigger_count: 0-500 channels, default 32")
+    addNote("  trigger_count: 0-500 路，默认 32")
+    addNote("  momentary_duration: 0.1-10.0 seconds, default 0.5")
+    addNote("  momentary_duration: 0.1-10.0 秒，默认 0.5")
+    addNote("")
+    addNote("Signal Pins / 信号引脚:")
+    addNote("  Trigger_In_N:    Input trigger button (click to fire)")
+    addNote("  Trigger_In_N:    输入触发按钮（点击触发）")
+    addNote("  Momentary_Out_N: Output toggle, true for duration then false")
+    addNote("  Momentary_Out_N: 输出开关，保持 true 时长后自动 false")
+    addNote("")
+    addNote("Behavior / 行为:")
+    addNote("  - Retriggerable: firing again while active resets the timer")
+    addNote("  - 可重触发：输出激活时再次触发会重置计时器")
+    addNote("  - Panel Duration knob overrides property value (x0.1s)")
+    addNote("  - 面板 Duration 旋钮覆盖属性值（单位 0.1 秒）")
+    addNote("  - Multiple channels can be active simultaneously")
+    addNote("  - 多路可同时处于激活状态")
+    addNote("  - Single 50ms polling timer drives all channels")
+    addNote("  - 单个 50ms 轮询定时器驱动所有通道")
+    addNote("")
+    addNote("Usage / 使用:")
+    addNote("  Connect a Trigger source -> Trigger_In_N")
+    addNote("  连接触发源 -> Trigger_In_N")
+    addNote("  Momentary_Out_N -> downstream device requiring pulse input")
+    addNote("  Momentary_Out_N -> 需要脉冲输入的下游设备")
+    addNote("  e.g. projector power, screen lift, relay trigger")
+    addNote("  例如：投影机电源、幕布升降、继电器触发")
+    addNote("")
+    addNote("After changing trigger_count, delete and re-drag component.")
+    addNote("修改 trigger_count 后，删除并重新拖入组件。")
+
+  elseif CurrentPage.ptype == "signals" then
+    local fs = 10
+    local rowH = 24
+    local y = 28
+
+    -- Title
+    table.insert(graphics, {
+      Type = "Text",
+      Text = CurrentPage.name,
+      FontSize = 14,
+      HTextAlign = "Left",
+      Position = {8, 4},
+      Size = {300, 20}
+    })
+
+    -- Column headers
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Trigger In",
+      FontSize = fs,
+      HTextAlign = "Center",
+      Position = {34, y},
+      Size = {124, 16}
+    })
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Momentary Out",
+      FontSize = fs,
+      HTextAlign = "Center",
+      Position = {196, y},
+      Size = {124, 16}
+    })
+    y = y + 20
+
+    for i = CurrentPage.startIdx, CurrentPage.endIdx do
+      local numLabel = tostring(i)
+
+      -- Number label for In
+      table.insert(graphics, {
+        Type = "Text",
+        Text = numLabel,
+        FontSize = fs,
+        HTextAlign = "Right",
+        Position = {8, y + 2},
+        Size = {22, rowH - 4}
+      })
+
+      -- Trigger In button
+      layout["Trigger_In_" .. i] = {
+        PrettyName = "Trigger In " .. i,
+        Legend = "TRIG",
+        Style = "Button",
+        ButtonStyle = "Trigger",
+        Color = Palette.Orange,
+        Margin = 1,
+        Position = {34, y},
+        Size = {124, rowH - 2}
+      }
+
+      -- Number label for Out
+      table.insert(graphics, {
+        Type = "Text",
+        Text = numLabel,
+        FontSize = fs,
+        HTextAlign = "Right",
+        Position = {170, y + 2},
+        Size = {22, rowH - 4}
+      })
+
+      -- Momentary Out indicator
+      layout["Momentary_Out_" .. i] = {
+        PrettyName = "Momentary Out " .. i,
+        Legend = "",
+        Style = "Button",
+        ButtonType = "Toggle",
+        Color = Palette.Green,
+        Margin = 1,
+        Position = {196, y},
+        Size = {124, rowH - 2}
+      }
+
+      y = y + rowH
+    end
+  end
+
+  return layout, graphics
+end
+
+--==============================================================================
+-- Runtime logic
+--==============================================================================
+if Controls then
+
+  local CHANNEL_COUNT = math.floor(Properties["trigger_count"].Value)
+  local POLL_INTERVAL = 0.05  -- 50ms
+
+  local activeChannels = {}   -- array of active channel indices
+  local remainingTime = {}    -- remaining seconds per channel
+  local pollTimer = Timer.New()
+
+  local function getDuration()
+    if Controls.Duration_Input then
+      local val = Controls.Duration_Input.Value
+      if val and val > 0 then
+        return val / 10.0  -- knob is in 0.1s units
+      end
+    end
+    return tonumber(Properties["momentary_duration"].Value) or 0.5
+  end
+
+  local function updateActiveCount()
+    if Controls.Active_Count then
+      Controls.Active_Count.String = tostring(#activeChannels)
+    end
+  end
+
+  local function fireChannel(n)
+    if n < 1 or n > CHANNEL_COUNT then
+      print("[DEBUG] fireChannel: channel " .. n .. " out of range")
+      return
+    end
+    local outCtrl = Controls["Momentary_Out_" .. n]
+    if not outCtrl then
+      print("[DEBUG] fireChannel: Momentary_Out_" .. n .. " NOT FOUND")
+      return
+    end
+
+    print("[DEBUG] fireChannel(" .. n .. ") -> output TRUE for " .. getDuration() .. "s")
+
+    -- Set output true (set both Boolean and Value for compatibility)
+    outCtrl.Boolean = true
+    outCtrl.Value = 1
+    print("[DEBUG] output set: Boolean=" .. tostring(outCtrl.Boolean) .. " Value=" .. tostring(outCtrl.Value))
+
+    -- Reset or set remaining time
+    remainingTime[n] = getDuration()
+
+    -- Add to active list if not already there
+    local found = false
+    for _, ch in ipairs(activeChannels) do
+      if ch == n then found = true; break end
+    end
+    if not found then
+      table.insert(activeChannels, n)
+    end
+
+    updateActiveCount()
+
+    -- Start poll timer if not running
+    if not pollTimer:IsRunning() then
+      pollTimer:Start(POLL_INTERVAL)
+    end
+  end
+
+  -- Poll timer: decrement all active channels, turn off when expired
+  pollTimer.EventHandler = function()
+    for i = #activeChannels, 1, -1 do
+      local ch = activeChannels[i]
+      remainingTime[ch] = remainingTime[ch] - POLL_INTERVAL
+      if remainingTime[ch] <= 0 then
+        local outCtrl = Controls["Momentary_Out_" .. ch]
+        if outCtrl then
+          outCtrl.Boolean = false
+          outCtrl.Value = 0
+        end
+        print("[DEBUG] channel " .. ch .. " expired -> output FALSE")
+        remainingTime[ch] = nil
+        table.remove(activeChannels, i)
+      end
+    end
+    updateActiveCount()
+    -- Stop timer if no active channels
+    if #activeChannels == 0 then
+      pollTimer:Stop()
+    end
+  end
+
+  -- Bind trigger event handlers directly on Controls table
+  local boundCount = 0
+  for i = 1, CHANNEL_COUNT do
+    if Controls["Trigger_In_" .. i] then
+      Controls["Trigger_In_" .. i].EventHandler = function(c)
+        print("[DEBUG] Trigger_In_" .. i .. " fired (Value=" .. tostring(c.Value) .. " Boolean=" .. tostring(c.Boolean) .. ")")
+        fireChannel(i)
+      end
+      boundCount = boundCount + 1
+    else
+      print("[DEBUG] WARNING: Trigger_In_" .. i .. " not found in Controls")
+    end
+  end
+
+  -- Verify output controls exist
+  local outCount = 0
+  for i = 1, CHANNEL_COUNT do
+    if Controls["Momentary_Out_" .. i] then
+      outCount = outCount + 1
+    end
+  end
+
+  -- Startup
+  print("==================================")
+  print("TriggerToMomentary v" .. PluginInfo.Version .. " started")
+  print("Channels: " .. CHANNEL_COUNT)
+  print("Trigger inputs bound: " .. boundCount)
+  print("Momentary outputs found: " .. outCount)
+  print("Duration: " .. getDuration() .. "s")
+  print("==================================")
+
+end

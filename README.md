@@ -231,6 +231,145 @@ Q-SYS Text -> crestronCIP.Serial_Out_3 -> Crestron Serial Join 3 (string)
 
 ---
 
+# TriggerToMomentary — Trigger to Momentary Pulse Converter
+
+Q-SYS Designer plugin that converts trigger button inputs into momentary (pulsed) outputs. Each trigger fires its corresponding output `true` for a configurable duration, then automatically returns to `false`. Retriggerable — firing again while active resets the timer.
+
+Q-SYS Designer 插件，将触发按钮输入转换为瞬时（脉冲）输出。每次触发使对应输出保持 `true` 一段可配置时长，然后自动恢复为 `false`。可重触发——输出激活时再次触发会重置计时器。
+
+---
+
+## Features / 功能特性
+
+- **Configurable channel count / 可配置通道数**: 0–500 channels, default 32, 50 per panel page
+- **Configurable pulse duration / 可配置脉冲时长**: 0.1–10.0 seconds, default 0.5s (Properties + panel knob override)
+- **Retriggerable / 可重触发**: Re-firing while output is active resets the countdown
+- **Trigger-type input pins / Trigger 类型输入引脚**: `ButtonType = "Trigger"` — accepts external Trigger signals directly
+- **Simultaneous channels / 多通道并行**: Multiple channels can be active at the same time
+- **Single polling timer / 单定时器驱动**: One 50ms timer drives all channels for efficiency
+- **Active count display / 激活数量显示**: Panel shows how many outputs are currently active
+- **Panel duration override / 面板时长覆盖**: Knob on Config page overrides property value in real time
+
+---
+
+## Properties / 属性参数
+
+| Property | Type | Range | Default | Description / 说明 |
+|----------|------|-------|---------|-------------------|
+| `trigger_count` | double | 0–500 | `32` | Number of trigger/momentary channel pairs / 触发-瞬时通道对数量 |
+| `momentary_duration` | double | 0.1–10.0s | `0.5` | Default pulse duration in seconds / 默认脉冲时长（秒） |
+
+> **Note / 注意**: After changing `trigger_count`, delete and re-drag the component to regenerate pins.
+> 修改 `trigger_count` 后，需删除并重新拖入组件以重新生成引脚。
+
+---
+
+## Control Pins / 控制引脚
+
+| Pin | Direction | Type | Description / 说明 |
+|-----|-----------|------|-------------------|
+| `Trigger_In_N` | Input | Trigger | Trigger input — fires momentary output on rising edge / 触发输入，上升沿触发瞬时输出 |
+| `Momentary_Out_N` | Output | Toggle | Momentary output — `true` for duration, then `false` / 瞬时输出，保持 true 设定时长后 false |
+
+### Panel-Only Controls / 仅面板控件（无外部引脚）
+
+| Control | Type | Description / 说明 |
+|---------|------|-------------------|
+| `Duration_Input` | Knob (1–100) | Pulse duration override in 0.1s units (5 = 0.5s) / 脉冲时长覆盖，单位 0.1 秒 |
+| `Active_Count` | Text | Number of currently active outputs / 当前激活输出数量 |
+
+---
+
+## Panel Pages / 面板页面
+
+### Config
+- Duration knob (0.1–10.0s, overrides property)
+- Active outputs count display
+- Channel count display
+- Bilingual Notes with full parameter and pin reference
+
+### Signals (50 per page)
+- Two columns: Trigger In (orange) | Momentary Out (green)
+- Numbered row labels for easy identification
+- Click TRIG button on panel to manually fire a channel
+
+---
+
+## Behavior / 行为逻辑
+
+```
+Trigger_In_N fires (rising edge)
+  → Momentary_Out_N = true
+  → remainingTime[N] = duration
+  → channel added to active list
+  → 50ms polling timer starts (if not running)
+
+Every 50ms:
+  → remainingTime[N] -= 0.05
+  → if remainingTime[N] <= 0:
+      Momentary_Out_N = false
+      channel removed from active list
+  → if no active channels: timer stops
+
+If Trigger_In_N fires again while active:
+  → remainingTime[N] = duration (reset)
+  → output stays true
+```
+
+---
+
+## Usage Example / 使用示例
+
+### Projector Power Trigger / 投影机电源触发
+
+```
+Q-SYS Schedule Trigger → TriggerToMomentary.Trigger_In_1
+TriggerToMomentary.Momentary_Out_1 → Projector Power Input (needs 0.5s pulse)
+```
+
+### Screen Lift / 幕布升降
+
+```
+Touch Panel Button → TriggerToMomentary.Trigger_In_5
+TriggerToMomentary.Momentary_Out_5 → Relay (momentary closure for 1s)
+```
+
+### Use with crestronCIP / 与 crestronCIP 配合
+
+```
+Crestron Digital Join (momentary) → crestronCIP.Digital_In_1
+crestronCIP.Digital_In_1 → TriggerToMomentary.Trigger_In_1
+TriggerToMomentary.Momentary_Out_1 → Q-SYS device requiring longer pulse
+```
+
+> Set `momentary_duration` to 0.5s or more to ensure downstream devices detect the pulse.
+> 将 `momentary_duration` 设为 0.5 秒或更长，确保下游设备能检测到脉冲。
+
+---
+
+## Changelog / 版本历史
+
+### v1.0.0 (2026-10-08)
+- Initial release / 初始版本
+- 0–500 configurable channels / 0-500 可配置通道
+- Configurable 0.1–10.0s pulse duration / 可配置 0.1-10.0 秒脉冲时长
+- Retriggerable operation / 可重触发
+- Trigger-type input pins / Trigger 类型输入引脚
+- Single 50ms polling timer / 单个 50ms 轮询定时器
+
+---
+
+## Demo Files / 演示文件
+
+The `demo/` folder contains test files for CIP integration:
+
+| File | Description / 说明 |
+|------|-------------------|
+| `demo/CIP.qsys` | Q-SYS Designer test design with crestronCIP and signal routing / 含 crestronCIP 和信号路由的 Q-SYS 测试设计 |
+| `demo/CIP_archive.zip` | Compiled Q-SYS design archive for Core deployment / 用于 Core 部署的编译后 Q-SYS 设计归档 |
+
+---
+
 ## Author / 作者
 
 **longwang** — wxl_personal_plug series
