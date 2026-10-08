@@ -6,7 +6,7 @@
 
 PluginInfo = {
   Name = "wxl_personal_plug~crestronCIP",
-  Version = "1.0.0",
+  Version = "1.1.2",
   Author = "longwang",
   Id = "b7e8a2c1-3d4f-4a6e-9c2d-8f1e5b7a3c9d",
   Description = "Crestron CIP protocol gateway with configurable signal counts"
@@ -29,6 +29,7 @@ local SIGNALS_PER_PAGE = 50
 
 function BuildPageList(props)
   local pages = {{ name = "Connection", ptype = "connection" }}
+  table.insert(pages, { name = "Monitor", ptype = "monitor" })
   local digCount = math.floor(props["digital_count"].Value)
   local anaCount = math.floor(props["analog_count"].Value)
   local serCount = math.floor(props["serial_count"].Value)
@@ -106,20 +107,29 @@ function GetProperties()
     Value = 32
   })
 
-  -- Debug TCP client: remote log server IP
+  -- Digital output pulse width (seconds) for trigger reliability
   table.insert(props, {
-    Name = "debug_server_ip",
-    Type = "string",
-    Value = "192.168.1.100"
+    Name = "digital_pulse_width",
+    Type = "double",
+    Min = 0.1,
+    Max = 2.0,
+    Value = 0.3
   })
 
-  -- Debug TCP client: remote log server port
+  -- Auto reconnect on disconnect
   table.insert(props, {
-    Name = "debug_server_port",
+    Name = "auto_reconnect",
+    Type = "string",
+    Value = "true"
+  })
+
+  -- Reconnect interval (seconds)
+  table.insert(props, {
+    Name = "reconnect_interval",
     Type = "double",
     Min = 1,
-    Max = 65535,
-    Value = 10001
+    Max = 60,
+    Value = 5
   })
 
   return props
@@ -194,45 +204,22 @@ function GetControls(props)
     Count = 1
   })
 
-  -- Debug: log server IP input
+  -- Monitor: log output (external pin available)
   table.insert(ctrls, {
-    Name = "Debug_Server_IP",
+    Name = "monitor_log",
     ControlType = "Text",
-    DefaultValue = props["debug_server_ip"].Value,
-    PinStyle = "Input",
-    UserPin = false,
-    Count = 1
-  })
-
-  -- Debug: log server port input
-  table.insert(ctrls, {
-    Name = "Debug_Server_Port",
-    ControlType = "Text",
-    DefaultValue = tostring(math.floor(props["debug_server_port"].Value)),
-    PinStyle = "Input",
-    UserPin = false,
-    Count = 1
-  })
-
-  -- Debug: connect / disconnect toggle
-  table.insert(ctrls, {
-    Name = "Debug_Connect",
-    ControlType = "Button",
-    ButtonType = "Toggle",
-    DefaultValue = false,
-    PinStyle = "Input",
-    UserPin = true,
-    Count = 1
-  })
-
-  -- Debug: connection status indicator
-  table.insert(ctrls, {
-    Name = "Debug_Status",
-    ControlType = "Button",
-    ButtonType = "Toggle",
-    DefaultValue = false,
+    DefaultValue = "",
     PinStyle = "Output",
     UserPin = true,
+    Count = 1
+  })
+
+  -- Monitor: clear button
+  table.insert(ctrls, {
+    Name = "monitor_clear",
+    ControlType = "Button",
+    ButtonStyle = "Trigger",
+    UserPin = false,
     Count = 1
   })
 
@@ -277,6 +264,17 @@ function GetControls(props)
     })
   end
 
+  -- Analog input value display (no pin)
+  for i = 1, anaCount do
+    table.insert(ctrls, {
+      Name = "Analog_In_" .. i .. "_Val",
+      ControlType = "Text",
+      DefaultValue = "0",
+      UserPin = false,
+      Count = 1
+    })
+  end
+
   -- Analog outputs (from Q-SYS to Crestron)
   for i = 1, anaCount do
     table.insert(ctrls, {
@@ -288,6 +286,17 @@ function GetControls(props)
       DefaultValue = 0,
       PinStyle = "Input",
       UserPin = true,
+      Count = 1
+    })
+  end
+
+  -- Analog output value display (no pin)
+  for i = 1, anaCount do
+    table.insert(ctrls, {
+      Name = "Analog_Out_" .. i .. "_Val",
+      ControlType = "Text",
+      DefaultValue = "0",
+      UserPin = false,
       Count = 1
     })
   end
@@ -377,21 +386,39 @@ function GetControlLayout(props)
       })
 
       -- In control
-      local inLayout = {
-        PrettyName = signalType .. " In " .. i,
-        Style = (signalType == "Digital" and "Button" or (signalType == "Analog" and "Fader" or "Text")),
-        Margin = 1,
-        Position = {34, y},
-        Size = {124, rowH - 2}
-      }
-      if signalType == "Digital" then
-        inLayout.ButtonStyle = "Toggle"
-        inLayout.Color = Palette.Green
-      elseif signalType == "Serial" then
-        inLayout.FontSize = 9
-        inLayout.HTextAlign = "Left"
+      if signalType == "Analog" then
+        layout[inName] = {
+          PrettyName = signalType .. " In " .. i,
+          Style = "Fader",
+          Margin = 1,
+          Position = {34, y},
+          Size = {82, rowH - 2}
+        }
+        layout[inName .. "_Val"] = {
+          PrettyName = signalType .. " In " .. i .. " Val",
+          Style = "Text",
+          FontSize = 9,
+          HTextAlign = "Left",
+          Position = {120, y + 2},
+          Size = {42, rowH - 4}
+        }
+      else
+        local inLayout = {
+          PrettyName = signalType .. " In " .. i,
+          Style = (signalType == "Digital" and "Button" or "Text"),
+          Margin = 1,
+          Position = {34, y},
+          Size = {124, rowH - 2}
+        }
+        if signalType == "Digital" then
+          inLayout.ButtonStyle = "Toggle"
+          inLayout.Color = Palette.Green
+        else
+          inLayout.FontSize = 9
+          inLayout.HTextAlign = "Left"
+        end
+        layout[inName] = inLayout
       end
-      layout[inName] = inLayout
 
       -- Number label for Out
       table.insert(graphics, {
@@ -404,21 +431,39 @@ function GetControlLayout(props)
       })
 
       -- Out control
-      local outLayout = {
-        PrettyName = signalType .. " Out " .. i,
-        Style = (signalType == "Digital" and "Button" or (signalType == "Analog" and "Fader" or "Text")),
-        Margin = 1,
-        Position = {196, y},
-        Size = {124, rowH - 2}
-      }
-      if signalType == "Digital" then
-        outLayout.ButtonStyle = "Toggle"
-        outLayout.Color = Palette.Red
-      elseif signalType == "Serial" then
-        outLayout.FontSize = 9
-        outLayout.HTextAlign = "Left"
+      if signalType == "Analog" then
+        layout[outName] = {
+          PrettyName = signalType .. " Out " .. i,
+          Style = "Fader",
+          Margin = 1,
+          Position = {196, y},
+          Size = {82, rowH - 2}
+        }
+        layout[outName .. "_Val"] = {
+          PrettyName = signalType .. " Out " .. i .. " Val",
+          Style = "Text",
+          FontSize = 9,
+          HTextAlign = "Left",
+          Position = {282, y + 2},
+          Size = {42, rowH - 4}
+        }
+      else
+        local outLayout = {
+          PrettyName = signalType .. " Out " .. i,
+          Style = (signalType == "Digital" and "Button" or "Text"),
+          Margin = 1,
+          Position = {196, y},
+          Size = {124, rowH - 2}
+        }
+        if signalType == "Digital" then
+          outLayout.ButtonStyle = "Toggle"
+          outLayout.Color = Palette.Red
+        else
+          outLayout.FontSize = 9
+          outLayout.HTextAlign = "Left"
+        end
+        layout[outName] = outLayout
       end
-      layout[outName] = outLayout
 
       y = y + rowH
     end
@@ -526,10 +571,10 @@ function GetControlLayout(props)
       Size = {324, 20}
     })
 
-    -- Debug log server section
+    -- Properties Notes (bilingual)
     table.insert(graphics, {
       Type = "GroupBox",
-      Text = "Debug Log Server",
+      Text = "Notes / 说明",
       FontSize = fs,
       HTextAlign = "Left",
       Fill = Palette.White,
@@ -537,134 +582,148 @@ function GetControlLayout(props)
       StrokeWidth = 1,
       CornerRadius = 6,
       Position = {8, 155},
-      Size = {324, 95}
+      Size = {324, 685}
     })
-    -- Server IP
+    local noteY = 171
+    local noteLine = 13
+    local function addNote(text)
+      table.insert(graphics, {
+        Type = "Text",
+        Text = text,
+        FontSize = 8,
+        HTextAlign = "Left",
+        Position = {14, noteY},
+        Size = {312, noteLine}
+      })
+      noteY = noteY + noteLine
+    end
+
+    addNote("Crestron CIP Gateway v1.1.2 / Crestron CIP 协议网关")
+    addNote("TCP port 41794, connects Q-SYS Core to Crestron processor via CIP.")
+    addNote("TCP 端口 41794，通过 CIP 协议连接 Q-SYS Core 与 Crestron 中控。")
+    addNote("")
+    addNote("Properties / 属性参数:")
+    addNote("  cip_ip: default Crestron IP (panel IP_Input overrides)")
+    addNote("  cip_ip: 默认 Crestron IP（面板 IP_Input 可覆盖）")
+    addNote("  cip_ipid: hex 03-FF, device IP-ID, default 03")
+    addNote("  cip_ipid: 十六进制 03-FF，设备 IP-ID，默认 03")
+    addNote("  digital/analog/serial_count: 0-500 signals, 50 per page")
+    addNote("  digital/analog/serial_count: 0-500 个信号，每页 50 个")
+    addNote("  digital_pulse_width: 0.1-2.0s, stretches short trigger pulses")
+    addNote("  digital_pulse_width: 0.1-2.0 秒，拉长短触发脉冲保证可靠")
+    addNote("  auto_reconnect: true/false, reconnect on disconnect")
+    addNote("  auto_reconnect: true/false，断开后自动重连")
+    addNote("  reconnect_interval: 1-60s, auto-reconnect interval")
+    addNote("  reconnect_interval: 1-60 秒，自动重连间隔")
+    addNote("")
+    addNote("Signal Pins / 信号引脚:")
+    addNote("  Digital_In_N:  Crestron->QSC toggle (boolean)")
+    addNote("  Digital_In_N:  Crestron->QSC 开关量（布尔）")
+    addNote("  Digital_Out_N: QSC->Crestron toggle, pulse stretched to pulse_width")
+    addNote("  Digital_Out_N: QSC->Crestron 开关量，脉冲拉伸至 pulse_width")
+    addNote("  Analog_In_N:   Crestron->QSC integer 0-65535")
+    addNote("  Analog_In_N:   Crestron->QSC 模拟量 0-65535")
+    addNote("  Analog_Out_N:  QSC->Crestron integer 0-65535")
+    addNote("  Analog_Out_N:  QSC->Crestron 模拟量 0-65535")
+    addNote("  Serial_In_N:   Crestron->QSC text string")
+    addNote("  Serial_In_N:   Crestron->QSC 字符串")
+    addNote("  Serial_Out_N:  QSC->Crestron text string")
+    addNote("  Serial_Out_N:  QSC->Crestron 字符串")
+    addNote("  *_Val: value display only, NO external pin")
+    addNote("  *_Val: 仅数值显示，无外部引脚")
+    addNote("")
+    addNote("v1.1.0: default auto-connect on startup, auto-reconnect")
+    addNote("v1.1.0: 启动默认自动连接，断开自动重连")
+    addNote("        0x03/0x0F/0x0D handling, multi-subpacket parse")
+    addNote("        0x03断开/0x0F程序状态/0x0D心跳处理、多子包解析")
+    addNote("v1.1.1: watchdog timeout (30s no data -> force reconnect)")
+    addNote("v1.1.1: 心跳超时检测（30秒无数据主动重连）")
+    addNote("        catches dead TCP after Crestron reboot/power loss")
+    addNote("        解决Crestron重启/断电后TCP假连接不自动重连")
+    addNote("v1.1.2: os.time() watchdog, post-reg signal check, forceReconnect()")
+    addNote("v1.1.2: 改用os.time()计时、注册后无信号检测、统一重连函数")
+    addNote("        Level1: 20s no TCP data -> Crestron unreachable")
+    addNote("        Level1: 20秒无TCP数据 -> Crestron不可达")
+    addNote("        Level2: 15s registered but no signal -> fake CIP session")
+    addNote("        Level2: 注册后15秒无信号 -> 假CIP会话强制重连")
+    addNote("        digital pulse stretching, analog value display")
+    addNote("        数字量脉冲拉伸、模拟量数值显示")
+
+  elseif CurrentPage.ptype == "monitor" then
+    -- Title
     table.insert(graphics, {
       Type = "Text",
-      Text = "Server IP:",
-      FontSize = fs,
+      Text = "Monitor / 监控日志",
+      FontSize = 14,
       HTextAlign = "Left",
-      Position = {14, 173},
-      Size = {70, 20}
+      Position = {8, 4},
+      Size = {300, 20}
     })
-    layout["Debug_Server_IP"] = {
-      PrettyName = "Debug Server IP",
+
+    -- Log display area
+    layout["monitor_log"] = {
+      PrettyName = "Monitor Log",
       Style = "Text",
-      FontSize = fs,
+      FontSize = 9,
       HTextAlign = "Left",
-      Position = {86, 171},
-      Size = {150, 24}
-    }
-    -- Server Port
-    table.insert(graphics, {
-      Type = "Text",
-      Text = "Port:",
-      FontSize = fs,
-      HTextAlign = "Left",
-      Position = {244, 173},
-      Size = {36, 20}
-    })
-    layout["Debug_Server_Port"] = {
-      PrettyName = "Debug Server Port",
-      Style = "Text",
-      FontSize = fs,
-      HTextAlign = "Left",
-      Position = {282, 171},
-      Size = {44, 24}
-    }
-    -- Debug Connect button
-    layout["Debug_Connect"] = {
-      PrettyName = "Debug Connect",
-      Legend = "Connect",
-      Style = "Button",
-      ButtonStyle = "Toggle",
-      Color = Palette.Blue,
-      Margin = 2,
-      Position = {14, 205},
-      Size = {100, 30}
-    }
-    -- Debug Status
-    table.insert(graphics, {
-      Type = "Text",
-      Text = "Status:",
-      FontSize = fs,
-      HTextAlign = "Left",
-      Position = {130, 211},
-      Size = {50, 20}
-    })
-    layout["Debug_Status"] = {
-      PrettyName = "Debug Status",
-      Legend = "",
-      Style = "Button",
-      ButtonStyle = "Toggle",
-      Color = Palette.Green,
-      Margin = 2,
-      Position = {178, 207},
-      Size = {40, 26}
+      VTextAlign = "Top",
+      Position = {8, 32},
+      Size = {324, 420}
     }
 
-    -- Properties Notes
+    -- Clear button
+    layout["monitor_clear"] = {
+      PrettyName = "Clear Log",
+      Legend = "Clear",
+      Style = "Button",
+      ButtonStyle = "Trigger",
+      Color = Palette.Red,
+      Margin = 2,
+      Position = {8, 460},
+      Size = {100, 30}
+    }
+
+    -- Status info
+    table.insert(graphics, {
+      Type = "Text",
+      Text = "Max 50 lines / 最多50行  |  Auto-scroll / 自动滚动",
+      FontSize = 9,
+      HTextAlign = "Left",
+      Position = {120, 468},
+      Size = {210, 20}
+    })
+
+    -- Notes
     table.insert(graphics, {
       Type = "GroupBox",
-      Text = "Properties Notes",
+      Text = "Notes / 说明",
       FontSize = fs,
       HTextAlign = "Left",
       Fill = Palette.White,
       StrokeColor = Palette.Black,
       StrokeWidth = 1,
       CornerRadius = 6,
-      Position = {8, 260},
-      Size = {324, 114}
+      Position = {8, 500},
+      Size = {324, 130}
     })
-    table.insert(graphics, {
-      Type = "Text",
-      Text = "cip_ip: default IP (panel IP_Input overrides)",
-      FontSize = 9,
-      HTextAlign = "Left",
-      Position = {14, 278},
-      Size = {312, 14}
-    })
-    table.insert(graphics, {
-      Type = "Text",
-      Text = "cip_ipid: hex 03-FF, default 03",
-      FontSize = 9,
-      HTextAlign = "Left",
-      Position = {14, 292},
-      Size = {312, 14}
-    })
-    table.insert(graphics, {
-      Type = "Text",
-      Text = "digital/analog/serial_count: 0-500, 50 per page",
-      FontSize = 9,
-      HTextAlign = "Left",
-      Position = {14, 306},
-      Size = {312, 14}
-    })
-    table.insert(graphics, {
-      Type = "Text",
-      Text = "Signal pins: Digital_In/Out, Analog_In/Out, Serial_In/Out",
-      FontSize = 9,
-      HTextAlign = "Left",
-      Position = {14, 320},
-      Size = {312, 14}
-    })
-    table.insert(graphics, {
-      Type = "Text",
-      Text = "Analog range: 0-65535 (16-bit unsigned)",
-      FontSize = 9,
-      HTextAlign = "Left",
-      Position = {14, 334},
-      Size = {312, 14}
-    })
-    table.insert(graphics, {
-      Type = "Text",
-      Text = "debug_server_ip/port: remote log server (TCP client mode)",
-      FontSize = 9,
-      HTextAlign = "Left",
-      Position = {14, 348},
-      Size = {312, 14}
-    })
+    local mY = 516
+    local function mNote(text)
+      table.insert(graphics, {
+        Type = "Text",
+        Text = text,
+        FontSize = 8,
+        HTextAlign = "Left",
+        Position = {14, mY},
+        Size = {312, 13}
+      })
+      mY = mY + 13
+    end
+    mNote("Real-time log of all CIP signal changes and connection events.")
+    mNote("实时记录所有 CIP 信号变化和连接事件。")
+    mNote("Format: HH:MM:SS [Flow] [Type Dir N] = value")
+    mNote("格式: 时:分:秒 [流向] [类型 方向 编号] = 值")
+    mNote("Flow: QSC->Crestron / Crestron->QSC / System")
+    mNote("流向: QSC发Crestron / Crestron发QSC / 系统事件")
 
   elseif CurrentPage.ptype == "digital" then
     renderSignalPage(CurrentPage, "Digital")
@@ -679,104 +738,95 @@ end
 
 --==============================================================================
 -- Runtime logic (executes on Core)
+-- v1.1.2: os.time() watchdog, post-reg signal check, forceReconnect()
+-- v1.1.1: Watchdog timeout (30s no data -> force reconnect)
+-- v1.1.0: Auto-reconnect, 0x03/0x0F/0x0D handling, multi-subpacket parse,
+--          digital pulse stretching, analog value display
 --==============================================================================
 if Controls then
 
-  -- Load configuration from properties
   local MAX_DIGITAL = math.floor(Properties["digital_count"].Value)
   local MAX_ANALOG  = math.floor(Properties["analog_count"].Value)
   local MAX_SERIAL  = math.floor(Properties["serial_count"].Value)
   local CIP_PORT    = 41794
 
-  -- Global state variables
-  local tcp          = nil
-  local pollTimer    = Timer.New()
-  local hbTimer      = Timer.New()
-  local isConnected  = false
-  local isRegistered = false
-  local rxBuffer     = ""
+  local tcp             = nil
+  local pollTimer       = Timer.New()
+  local hbTimer         = Timer.New()
+  local reconnectTimer  = Timer.New()
+  local regTimeoutTimer = Timer.New()
+  local watchdogTimer   = Timer.New()
+  local isConnected     = false
+  local isRegistered    = false
+  local programReady    = false
+  local rxBuffer        = ""
+  local userDisconnected = false
+  local lastDataTime    = 0  -- os.time() of last received byte (incl. heartbeats)
+  local lastSignalTime  = 0  -- os.time() of last real signal data (digital/analog/serial)
+  local regCompleteTime = 0  -- os.time() when CIP registration succeeded
+  local WATCHDOG_TIMEOUT = 20  -- seconds without ANY data before force-reconnect
+  local POST_REG_TIMEOUT = 15  -- seconds after registration with no signal data -> force-reconnect
 
-  -- Debug TCP Client: connects to user's log server
-  local debugSocket = TcpSocket.New()
+  -- Digital pulse timers (one per output join)
+  local digitalPulseTimers = {}
 
-  local function getDebugServerIP()
-    if Controls.Debug_Server_IP ~= nil and Controls.Debug_Server_IP.String ~= "" then
-      return Controls.Debug_Server_IP.String
-    end
-    return Properties["debug_server_ip"].Value
-  end
-
-  local function getDebugServerPort()
-    if Controls.Debug_Server_Port ~= nil and Controls.Debug_Server_Port.String ~= "" then
-      local p = tonumber(Controls.Debug_Server_Port.String)
-      if p then return math.floor(p) end
-    end
-    return math.floor(Properties["debug_server_port"].Value)
-  end
-
-  debugSocket.EventHandler = function(sock, event)
-    if event == "CONNECTED" then
-      if Controls.Debug_Status then Controls.Debug_Status.Boolean = true end
-      if Controls.Debug_Connect then Controls.Debug_Connect.Boolean = true end
-      print("[Debug] Connected to log server " .. getDebugServerIP() .. ":" .. getDebugServerPort())
-    elseif event == "CLOSED" then
-      if Controls.Debug_Status then Controls.Debug_Status.Boolean = false end
-      if Controls.Debug_Connect then Controls.Debug_Connect.Boolean = false end
-      print("[Debug] Log server connection closed")
-    elseif event == "ERROR" then
-      if Controls.Debug_Status then Controls.Debug_Status.Boolean = false end
-      if Controls.Debug_Connect then Controls.Debug_Connect.Boolean = false end
-      print("[Debug] Log server connection error")
-    elseif event == "DATA" then
-      sock:Read(4096)
-    end
-  end
-
-  -- Debug connect button
-  Controls.Debug_Connect.EventHandler = function(c)
-    if c.Boolean then
-      debugSocket:Connect(getDebugServerIP(), getDebugServerPort())
+  -- Monitor log
+  local logLines = {}
+  local MAX_LOG_LINES = 50
+  local function addLog(category, direction, detail)
+    local ts = os.date("%H:%M:%S")
+    local flow = ""
+    if direction == "Out" then
+      flow = "[QSC->Crestron]"
+    elseif direction == "In" then
+      flow = "[Crestron->QSC]"
     else
-      debugSocket:Disconnect()
+      flow = "[System]"
+    end
+    local line
+    if direction == "Event" then
+      line = ts .. "  " .. flow .. " [" .. category .. "] " .. detail
+    else
+      -- detail format: "N = value" -> split into join and value
+      local eq = detail:find(" = ")
+      if eq then
+        local join = detail:sub(1, eq - 1)
+        local value = detail:sub(eq + 3)
+        line = ts .. "  " .. flow .. " [" .. category .. " " .. direction .. " " .. join .. "] = " .. value
+      else
+        line = ts .. "  " .. flow .. " [" .. category .. " " .. direction .. "] " .. detail
+      end
+    end
+    table.insert(logLines, line)
+    while #logLines > MAX_LOG_LINES do
+      table.remove(logLines, 1)
+    end
+    if Controls.monitor_log then
+      Controls.monitor_log.String = table.concat(logLines, "\n")
     end
   end
 
-  -- Override print to also send to log server
-  local originalPrint = print
-  print = function(...)
-    local args = {...}
-    local parts = {}
-    for _, v in ipairs(args) do
-      table.insert(parts, tostring(v))
-    end
-    local msg = table.concat(parts, "\t")
-    originalPrint(msg)
-    if debugSocket and debugSocket.IsConnected then
-      pcall(function() debugSocket:Write(msg .. "\r\n") end)
-    end
+  -- Config helpers
+  local function getPulseWidth()
+    return tonumber(Properties["digital_pulse_width"].Value) or 0.3
   end
 
-  print("[Debug] TCP log client ready, connect via panel to start")
-
-  -- Helper: convert binary string to hex (replaces Python binascii.hexlify)
-  local function toHex(str)
-    local hex = ""
-    for i = 1, #str do
-      hex = hex .. string.format("%02X ", str:byte(i))
-    end
-    return hex
+  local function getReconnectInterval()
+    return tonumber(Properties["reconnect_interval"].Value) or 5
   end
 
-  -- Get target IP: panel input overrides property default
+  local function isAutoReconnect()
+    local v = Properties["auto_reconnect"].Value
+    return v == "true" or v == "True" or v == "1"
+  end
+
   local function getTargetIP()
     if Controls.IP_Input ~= nil and Controls.IP_Input.String ~= "" then
       return Controls.IP_Input.String
     end
-    print("[CIP] IP_Input empty, using property default: " .. Properties["cip_ip"].Value)
     return Properties["cip_ip"].Value
   end
 
-  -- Get target IPID: panel input overrides property default (hex string)
   local function getTargetIPID()
     if Controls.IPID_Input ~= nil and Controls.IPID_Input.String ~= "" then
       local val = tonumber(Controls.IPID_Input.String, 16)
@@ -785,53 +835,27 @@ if Controls then
     return tonumber(Properties["cip_ipid"].Value, 16) or 3
   end
 
-  -- Initialize control states
+  local function toHex(str)
+    local hex = ""
+    for i = 1, #str do
+      hex = hex .. string.format("%02X ", str:byte(i))
+    end
+    return hex
+  end
+
+  local function updateAnalogVal(prefix, join, value)
+    local ctrl = Controls[prefix .. "_" .. join .. "_Val"]
+    if ctrl then ctrl.String = tostring(value) end
+  end
+
   local function initControls()
-    if Controls.CIP_Status then
-      Controls.CIP_Status.Boolean = false
-    end
-    if Controls.CIP_Connect then
-      Controls.CIP_Connect.Boolean = false
-    end
-    print("[CIP] Controls initialized")
+    if Controls.CIP_Status then Controls.CIP_Status.Boolean = false end
+    -- Do NOT reset CIP_Connect here - preserve user's choice during runtime
+    isRegistered = false
+    programReady = false
   end
 
-  -- TCP socket initialization
-  local function initTcpSocket()
-    if tcp ~= nil then
-      tcp:Disconnect()
-      tcp = nil
-    end
-    tcp = TcpSocket.New()
-    tcp.EventHandler = function(s, eventType)
-      print("[TCP] Event: " .. eventType)
-      if eventType == "CONNECTED" then
-        isConnected = true
-        if Controls.CIP_Status then Controls.CIP_Status.Boolean = true end
-        if Controls.CIP_Connect then Controls.CIP_Connect.Boolean = true end
-        print("[TCP] Connected to " .. getTargetIP())
-        sendRegistration()
-        hbTimer:Start(15)
-        pollTimer:Start(0.05)
-      elseif eventType == "CLOSED" then
-        isConnected = false
-        isRegistered = false
-        initControls()
-        hbTimer:Stop()
-        pollTimer:Stop()
-        print("[TCP] Connection closed")
-      elseif eventType == "ERROR" then
-        isConnected = false
-        isRegistered = false
-        initControls()
-        hbTimer:Stop()
-        pollTimer:Stop()
-        print("[TCP] Connection error - check IP/network/Crestron service")
-      end
-    end
-  end
-
-  -- Send IPID registration packet
+  -- === CIP send functions ===
   function sendRegistration()
     if not tcp or not isConnected then return end
     local ipid = getTargetIPID()
@@ -840,14 +864,12 @@ if Controls then
     print("[CIP] Sent IPID registration (IPID=0x" .. string.format("%02X", ipid) .. ")")
   end
 
-  -- Send heartbeat
   function sendHeartbeat()
     if isConnected and tcp then
       tcp:Write(string.char(0x0D,0x00,0x02,0x00,0x00))
     end
   end
 
-  -- Send digital join
   function sendDigital(join, value)
     if not isRegistered or not tcp or join < 1 or join > MAX_DIGITAL then return end
     join = join - 1
@@ -855,9 +877,9 @@ if Controls then
     local jl = join % 256
     local flag = value and 0x00 or 0x80
     tcp:Write(string.char(0x05,0x00,0x06,0x00,0x00,0x03,0x00,jl,jh+flag))
+    addLog("Digital", "Out", (join + 1) .. " = " .. tostring(value))
   end
 
-  -- Send analog join
   function sendAnalog(join, value)
     if not isRegistered or not tcp or join < 1 or join > MAX_ANALOG then return end
     join = join - 1
@@ -867,9 +889,10 @@ if Controls then
     local vh = math.floor(value / 256)
     local vl = value % 256
     tcp:Write(string.char(0x05,0x00,0x08,0x00,0x00,0x05,0x14,jh,jl,vh,vl))
+    updateAnalogVal("Analog_Out", join + 1, value)
+    addLog("Analog", "Out", (join + 1) .. " = " .. value)
   end
 
-  -- Send serial join
   function sendString(join, str)
     if not isRegistered or not tcp or join < 1 or join > MAX_SERIAL then return end
     join = join - 1
@@ -882,160 +905,400 @@ if Controls then
     local jl = join % 256
     local pkt = string.char(0x12,lenH,lenL,0,0,0,4+len,0x34,jh,jl,0x03) .. s
     tcp:Write(pkt)
-    print("[CIP] Sent serial " .. (join+1) .. ": " .. s)
+    addLog("Serial", "Out", (join + 1) .. " = \"" .. s .. "\"")
   end
 
-  -- Parse incoming CIP packet
-  function parsePacket(pkt)
-    local pktLen = #pkt
-    if pktLen < 4 then
-      print("[CIP] Packet too short (<4 bytes), skipped")
+  -- === Parse a single Cresnet subpacket ===
+  local function parseSubPacket(subType, subData)
+    -- Digital (0x00)
+    if subType == 0x00 and #subData >= 2 then
+      local jl = subData:byte(1)
+      local jh = subData:byte(2)
+      local join = ((jh & 0x7F) * 256 + jl) + 1
+      if join >= 1 and join <= MAX_DIGITAL then
+        local value = (jh & 0x80) == 0
+        local ctrl = Controls["Digital_In_" .. join]
+        if ctrl then ctrl.Boolean = value end
+        lastSignalTime = os.time()
+        addLog("Digital", "In", join .. " = " .. tostring(value))
+      end
       return
     end
+    -- Analog (0x14)
+    if subType == 0x14 and #subData >= 4 then
+      local jh = subData:byte(1)
+      local jl = subData:byte(2)
+      local vh = subData:byte(3)
+      local vl = subData:byte(4)
+      local join = jh * 256 + jl + 1
+      if join >= 1 and join <= MAX_ANALOG then
+        local value = vh * 256 + vl
+        local ctrl = Controls["Analog_In_" .. join]
+        if ctrl then ctrl.Value = value end
+        updateAnalogVal("Analog_In", join, value)
+        lastSignalTime = os.time()
+        addLog("Analog", "In", join .. " = " .. value)
+      end
+      return
+    end
+    -- Command (0x03)
+    if subType == 0x03 and #subData >= 1 then
+      local cmd = subData:byte(1)
+      if cmd == 0x1C then
+        -- End of initial dump, send ack
+        if tcp and isConnected then
+          tcp:Write(string.char(0x05,0x00,0x05,0x00,0x00,0x02,0x03,0x1D))
+        end
+        print("[CIP] Sync complete (end-of-query), ack sent")
+      end
+      return
+    end
+  end
+
+  -- === Parse 0x05 data frame (may contain MULTIPLE subpackets) ===
+  local function parseDataFrame(payload)
+    local pos = 3  -- skip 2-byte handle, point to first subpacket len byte
+    while pos <= #payload do
+      local subLen = payload:byte(pos)
+      if not subLen or subLen < 2 then break end
+      if pos + 1 + subLen > #payload + 1 then break end
+      local subType = payload:byte(pos + 1)
+      local subData = payload:sub(pos + 2, pos + subLen)
+      parseSubPacket(subType, subData)
+      pos = pos + 1 + subLen
+    end
+  end
+
+  -- === Parse 0x12 extended data frame ===
+  local function parseExtendedFrame(payload)
+    local pos = 3  -- skip 2-byte handle
+    while pos + 2 <= #payload do
+      local subLenH = payload:byte(pos)
+      local subLenL = payload:byte(pos + 1)
+      local subLen = subLenH * 256 + subLenL
+      if subLen < 2 or pos + 1 + subLen > #payload then break end
+      local subType = payload:byte(pos + 2)
+      local subData = payload:sub(pos + 3, pos + 1 + subLen)
+      -- Serial extended (0x34)
+      if subType == 0x34 and #subData >= 3 then
+        local jh = subData:byte(1)
+        local jl = subData:byte(2)
+        local join = jh * 256 + jl + 1
+        if join >= 1 and join <= MAX_SERIAL then
+          local str = subData:sub(4):gsub("[%z%c]", "")
+          local ctrl = Controls["Serial_In_" .. join]
+          if ctrl then ctrl.String = str end
+          lastSignalTime = os.time()
+          addLog("Serial", "In", join .. " = \"" .. str .. "\"")
+        end
+      end
+      pos = pos + 2 + subLen
+    end
+  end
+
+  -- === Parse full CIP packet ===
+  local function parsePacket(pkt)
+    if #pkt < 4 then return end
     local typ = pkt:byte(1)
     local lenH = pkt:byte(2)
     local lenL = pkt:byte(3)
     local payloadLen = lenH * 256 + lenL
     local payload = pkt:sub(4)
 
-    -- Log all non-heartbeat packets for debugging
-    if typ ~= 0x0D and typ ~= 0x0E then
-      print("[CIP] RX type=0x" .. string.format("%02X", typ) ..
-            " payloadLen=" .. payloadLen .. " hex: " .. toHex(pkt))
-    end
-
-    -- 1. IPID registration response
-    if typ == 0x02 and payloadLen == 4 then
-      if payload == "\x00\x00\x00\x1F" then
-        isRegistered = true
-        print("[CIP] IPID registration successful")
-        tcp:Write(string.char(0x05,0x00,0x05,0x00,0x00,0x02,0x03,0x00))
+    -- 0x02: Registration response
+    if typ == 0x02 and payloadLen >= 3 then
+      if payload:sub(1,3) == "\xFF\xFF\x02" then
+        print("[CIP] IPID not defined or processor booting (FF FF 02)")
       else
-        print("[CIP] IPID registration failed, response: " .. toHex(payload))
+        isRegistered = true
+        regCompleteTime = os.time()
+        regTimeoutTimer:Stop()
+        print("[CIP] IPID registration successful (result: " .. toHex(payload) .. ")")
+        addLog("CIP", "Event", "Registered IPID=0x" .. string.format("%02X", getTargetIPID()))
+        -- Send update request to get initial join values
+        if tcp and isConnected then
+          tcp:Write(string.char(0x05,0x00,0x05,0x00,0x00,0x02,0x03,0x00))
+        end
+        hbTimer:Start(15)
       end
       return
     end
 
-    -- 2. CIP sync complete
-    if typ == 0x05 and payloadLen >= 5 and payload:byte(4) == 0x1C then
-      print("[CIP] Crestron sync complete, sending final ack")
-      tcp:Write(string.char(0x05,0x00,0x05,0x00,0x00,0x02,0x03,0x1D))
+    -- 0x03: Disconnect from processor (program stop/reload)
+    -- This is NOT a user disconnect — must auto-reconnect
+    if typ == 0x03 then
+      print("[CIP] Received disconnect (0x03) from processor - program stopped/reloaded")
+      addLog("CIP", "Event", "Processor disconnect (0x03)")
+      forceReconnect("processor sent 0x03 disconnect")
       return
     end
 
-    -- 3. Receive digital
-    if typ == 0x05 and payloadLen >= 6 and payload:byte(4) == 0x00 then
-      local jl = payload:byte(5)
-      local jh = payload:byte(6)
-      if not jh or not jl then
-        print("[CIP] Digital byte nil, skipped")
-        return
+    -- 0x0F: Program status (0=loading, 1=not running, 2=ready)
+    if typ == 0x0F and payloadLen >= 1 then
+      local status = payload:byte(1)
+      if status == 2 then
+        programReady = true
+        print("[CIP] Program ready (0x0F=2), sending registration")
+        sendRegistration()
+        regTimeoutTimer:Start(5)  -- 5s timeout for registration response
+      else
+        programReady = false
+        print("[CIP] Program status=" .. status .. " (0=loading, 1=not running, 2=ready), waiting...")
       end
-      local join = ((jh & 0x7F) * 256 + jl) + 1
-      if join < 1 or join > MAX_DIGITAL then
-        print("[CIP] Digital join out of range: " .. join .. ", skipped")
-        return
-      end
-      local value = (jh & 0x80) == 0
-      local ctrl = Controls["Digital_In_" .. join]
-      if ctrl then ctrl.Boolean = value end
       return
     end
 
-    -- 4. Receive analog
-    if typ == 0x05 and payloadLen >= 8 and payload:byte(4) == 0x14 then
-      local jh = payload:byte(5)
-      local jl = payload:byte(6)
-      local vh = payload:byte(7)
-      local vl = payload:byte(8)
-      if not jh or not jl or not vh or not vl then
-        print("[CIP] Analog byte nil, skipped")
-        return
-      end
-      local join = jh * 256 + jl + 1
-      if join < 1 or join > MAX_ANALOG then
-        print("[CIP] Analog join out of range: " .. join .. ", skipped")
-        return
-      end
-      local value = vh * 256 + vl
-      local ctrl = Controls["Analog_In_" .. join]
-      if ctrl then ctrl.Value = value end
+    -- 0x05: Data frame (may have multiple subpackets)
+    if typ == 0x05 then
+      parseDataFrame(payload)
       return
     end
 
-    -- 5. Receive serial
-    if typ == 0x12 and payloadLen >= 8 then
-      local jh = payload:byte(6)
-      local jl = payload:byte(7)
-      if not jh or not jl then
-        print("[CIP] Serial byte nil, skipped")
-        return
-      end
-      local join = jh * 256 + jl + 1
-      if join < 1 or join > MAX_SERIAL then
-        print("[CIP] Serial join out of range: " .. join .. ", skipped")
-        return
-      end
-      local str = payload:sub(9):gsub("[%z%c]", "")
-      local ctrl = Controls["Serial_In_" .. join]
-      if ctrl then ctrl.String = str end
-      print("[CIP] Received serial " .. join .. ": " .. str)
+    -- 0x12: Extended data (serial)
+    if typ == 0x12 then
+      parseExtendedFrame(payload)
       return
     end
 
-    -- 6. Heartbeat response
-    if typ == 0x0D or typ == 0x0E then
+    -- 0x0D: Heartbeat request FROM processor - MUST reply 0x0E
+    if typ == 0x0D then
+      if tcp and isConnected then
+        tcp:Write(string.char(0x0E,0x00,0x02,0x00,0x00))
+      end
       return
     end
 
-    -- Unhandled packet
-    print("[CIP] Unhandled packet type: 0x" .. string.format("%02X", typ) ..
-          ", totalLen: " .. pktLen .. ", payloadLen: " .. payloadLen ..
-          ", hex: " .. toHex(pkt))
+    -- 0x0E: Heartbeat response from processor
+    if typ == 0x0E then
+      -- Crestron is alive; lastDataTime already updated in pollTimer
+      return
+    end
+
+    -- Unhandled
+    if typ ~= 0x0D and typ ~= 0x0E then
+      print("[CIP] Unhandled pkt type=0x" .. string.format("%02X", typ) ..
+            " len=" .. payloadLen .. " hex=" .. toHex(pkt))
+    end
   end
 
-  -- Data receive polling (handles sticky packets)
+  -- === Connect / Disconnect ===
+  function doConnect()
+    userDisconnected = false
+    reconnectTimer:Stop()
+    regTimeoutTimer:Stop()
+    if tcp ~= nil then
+      tcp:Disconnect()
+      tcp = nil
+    end
+    isConnected = false
+    isRegistered = false
+    programReady = false
+    rxBuffer = ""
+    tcp = TcpSocket.New()
+    tcp.EventHandler = function(s, eventType)
+      if eventType == "CONNECTED" then
+        isConnected = true
+        lastDataTime = os.time()
+        lastSignalTime = 0
+        regCompleteTime = 0
+        if Controls.CIP_Status then Controls.CIP_Status.Boolean = true end
+        if Controls.CIP_Connect then Controls.CIP_Connect.Boolean = true end
+        print("[TCP] Connected to " .. getTargetIP() .. ":" .. CIP_PORT)
+        addLog("TCP", "Event", "Connected " .. getTargetIP() .. ":" .. CIP_PORT)
+        pollTimer:Start(0.05)
+        watchdogTimer:Start(5)
+        -- Wait for 0x0F program-ready before registering (per CIP spec)
+        -- Fallback: if no 0x0F within 3s, register anyway
+        regTimeoutTimer:Start(3)
+      elseif eventType == "CLOSED" then
+        isConnected = false
+        isRegistered = false
+        programReady = false
+        initControls()
+        hbTimer:Stop()
+        pollTimer:Stop()
+        regTimeoutTimer:Stop()
+        watchdogTimer:Stop()
+        print("[TCP] Connection closed")
+        addLog("TCP", "Event", "Connection closed")
+        if not userDisconnected and isAutoReconnect() then
+          print("[CIP] Auto-reconnect in " .. getReconnectInterval() .. "s")
+          addLog("TCP", "Event", "Auto-reconnect in " .. getReconnectInterval() .. "s")
+          reconnectTimer:Start(getReconnectInterval())
+        end
+      elseif eventType == "ERROR" then
+        isConnected = false
+        isRegistered = false
+        programReady = false
+        initControls()
+        hbTimer:Stop()
+        pollTimer:Stop()
+        regTimeoutTimer:Stop()
+        watchdogTimer:Stop()
+        print("[TCP] Connection error - check IP/network/Crestron")
+        addLog("TCP", "Event", "Connection error")
+        if not userDisconnected and isAutoReconnect() then
+          print("[CIP] Auto-reconnect in " .. getReconnectInterval() .. "s")
+          addLog("TCP", "Event", "Auto-reconnect in " .. getReconnectInterval() .. "s")
+          reconnectTimer:Start(getReconnectInterval())
+        end
+      end
+    end
+    tcp:Connect(getTargetIP(), CIP_PORT)
+  end
+
+  function doDisconnect()
+    userDisconnected = true
+    reconnectTimer:Stop()
+    regTimeoutTimer:Stop()
+    hbTimer:Stop()
+    pollTimer:Stop()
+    watchdogTimer:Stop()
+    if tcp then
+      tcp:Disconnect()
+      tcp = nil
+    end
+    isConnected = false
+    isRegistered = false
+    programReady = false
+    initControls()
+    print("[TCP] Disconnected by user")
+  end
+
+  -- Registration timeout: if no 0x0F in 3s, register anyway
+  regTimeoutTimer.EventHandler = function()
+    if isConnected and not isRegistered then
+      print("[CIP] No 0x0F program status received, registering anyway (fallback)")
+      sendRegistration()
+      regTimeoutTimer:Start(5)  -- another 5s for registration response
+    end
+  end
+
+  -- Reconnect timer
+  reconnectTimer.EventHandler = function()
+    if not userDisconnected and isAutoReconnect() then
+      print("[CIP] Auto-reconnecting...")
+      doConnect()
+    end
+  end
+
+  -- Force reconnect: cleanly tear down and schedule reconnect (NOT user-initiated)
+  local function forceReconnect(reason)
+    print("[CIP] Force reconnect: " .. reason)
+    addLog("TCP", "Event", "Force reconnect: " .. reason)
+    if tcp then
+      tcp:Disconnect()
+      tcp = nil
+    end
+    isConnected = false
+    isRegistered = false
+    programReady = false
+    regCompleteTime = 0
+    initControls()
+    hbTimer:Stop()
+    pollTimer:Stop()
+    regTimeoutTimer:Stop()
+    watchdogTimer:Stop()
+    if isAutoReconnect() then
+      reconnectTimer:Start(getReconnectInterval())
+    end
+  end
+
+  -- Watchdog: catches dead connections and fake CIP sessions
+  -- Level 1: no TCP data at all for WATCHDOG_TIMEOUT -> Crestron gone
+  -- Level 2: registered but no signal data for POST_REG_TIMEOUT -> fake session
+  watchdogTimer.EventHandler = function()
+    if not isConnected or userDisconnected then return end
+    local now = os.time()
+    -- Level 1: no data at all
+    local noData = now - lastDataTime
+    if noData > WATCHDOG_TIMEOUT then
+      forceReconnect("no data for " .. noData .. "s (Crestron unreachable)")
+      return
+    end
+    -- Level 2: registered but no real signal data
+    if isRegistered and regCompleteTime > 0 then
+      local refTime = lastSignalTime > regCompleteTime and lastSignalTime or regCompleteTime
+      local noSignal = now - refTime
+      if noSignal > POST_REG_TIMEOUT then
+        forceReconnect("registered but no signal data for " .. noSignal .. "s (fake CIP session)")
+        return
+      end
+    end
+  end
+
+  -- Heartbeat
+  hbTimer.EventHandler = sendHeartbeat
+
+  -- Data polling
   pollTimer.EventHandler = function()
     if not isConnected or not tcp then return end
     local data = tcp:Read(4096)
     if data then
       rxBuffer = rxBuffer .. data
+      lastDataTime = os.time()
     end
     while #rxBuffer >= 4 do
       local lenH = rxBuffer:byte(2)
       local lenL = rxBuffer:byte(3)
       local totalLen = 3 + (lenH * 256 + lenL)
-      if #rxBuffer < totalLen then
-        break
-      end
+      if totalLen < 4 or #rxBuffer < totalLen then break end
       parsePacket(rxBuffer:sub(1, totalLen))
       rxBuffer = rxBuffer:sub(totalLen + 1)
     end
   end
 
-  -- Connect button event
+  -- Connect button
   Controls.CIP_Connect.EventHandler = function(c)
     if c.Boolean then
-      initTcpSocket()
-      tcp:Connect(getTargetIP(), CIP_PORT)
+      doConnect()
     else
-      if tcp then
-        tcp:Disconnect()
+      doDisconnect()
+    end
+  end
+
+  -- Monitor clear button
+  if Controls.monitor_clear then
+    Controls.monitor_clear.EventHandler = function(c)
+      logLines = {}
+      if Controls.monitor_log then
+        Controls.monitor_log.String = "Monitor cleared."
       end
     end
   end
 
-  -- Bind digital outputs
+  -- === Digital outputs with PULSE STRETCHING ===
+  -- Short trigger pulses (10ms) are stretched to pulse_width (default 0.3s)
+  -- Long toggle holds are preserved: release only when user actually releases
   for i = 1, MAX_DIGITAL do
     local ctrl = Controls["Digital_Out_" .. i]
     if ctrl then
+      digitalPulseTimers[i] = Timer.New()
+      digitalPulseTimers[i].EventHandler = function()
+        -- Timer fired after pulse_width: if button already released (short
+        -- trigger), send release now. If still held (toggle mode), wait for
+        -- the actual falling edge.
+        if not ctrl.Boolean then
+          sendDigital(i, false)
+        end
+      end
       ctrl.EventHandler = function(c)
-        sendDigital(i, c.Boolean)
+        if c.Boolean then
+          -- Rising edge: send press immediately + start stretch timer
+          sendDigital(i, true)
+          digitalPulseTimers[i]:Start(getPulseWidth())
+        else
+          -- Falling edge: if timer already expired (long hold), release now.
+          -- If timer still running (short trigger), it will release at pulse_width.
+          if not digitalPulseTimers[i]:IsRunning() then
+            sendDigital(i, false)
+          end
+        end
       end
     end
   end
 
-  -- Bind analog outputs
+  -- Analog outputs
   for i = 1, MAX_ANALOG do
     local ctrl = Controls["Analog_Out_" .. i]
     if ctrl then
@@ -1045,7 +1308,7 @@ if Controls then
     end
   end
 
-  -- Bind serial outputs
+  -- Serial outputs
   for i = 1, MAX_SERIAL do
     local ctrl = Controls["Serial_Out_" .. i]
     if ctrl then
@@ -1055,13 +1318,31 @@ if Controls then
     end
   end
 
-  -- Startup
+  -- === Startup ===
   initControls()
-  hbTimer.EventHandler = sendHeartbeat
+
+  -- Verify monitor_log control exists and initialize
+  if Controls.monitor_log then
+    Controls.monitor_log.String = "Monitor ready."
+    print("[Monitor] monitor_log control OK (external output pin enabled)")
+  else
+    print("[Monitor] WARNING: monitor_log control NOT found!")
+  end
+
   print("==================================")
-  print("crestronCIP gateway started")
+  print("crestronCIP gateway v1.1.2 started")
   print("Digital: " .. MAX_DIGITAL .. " | Analog: " .. MAX_ANALOG .. " | Serial: " .. MAX_SERIAL)
+  print("Pulse: " .. getPulseWidth() .. "s | Auto-reconnect: " .. tostring(isAutoReconnect()) ..
+        " (" .. getReconnectInterval() .. "s)")
   print("IPID: 0x" .. string.format("%02X", getTargetIPID()))
   print("==================================")
+
+  -- Default: auto-connect on startup (no manual Connect click needed)
+  -- Set CIP_Connect to ON and connect immediately
+  if Controls.CIP_Connect then
+    Controls.CIP_Connect.Boolean = true
+  end
+  print("[CIP] Auto-connecting on startup (default connected mode)")
+  doConnect()
 
 end
