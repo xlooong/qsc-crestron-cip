@@ -370,6 +370,109 @@ The `demo/` folder contains test files for CIP integration:
 
 ---
 
+# qsc-qplug-dev — Q-SYS Plugin Development Skill / Q-SYS 插件开发技能
+
+A reusable AI Agent skill that standardizes Q-SYS Designer qplug plugin development. It encapsulates the official Q-SYS Developer Help API reference (37 documents), verified debugging experience, and the `wxl_personal_plug` house style. When loaded, the agent automatically follows these standards for every plugin task — no need to re-explain rules each time.
+
+一个可复用的 AI Agent 技能，标准化 Q-SYS Designer qplug 插件开发。它封装了 Q-SYS 官方开发者帮助 API 参考（37 份文档）、实践验证的调试经验以及 `wxl_personal_plug` 系列风格。加载后，Agent 在每次插件任务中自动遵循这些规范——无需每次重复说明规则。
+
+## Skill Files / 技能文件
+
+```
+skill/
+├── SKILL.md                          # Skill entry: triggers, workflow, critical rules
+└── references/
+    └── qplug-standards.md            # Full API reference + pitfalls (12 sections)
+```
+
+## What It Covers / 涵盖内容
+
+### 1. Official API Reference / 官方 API 参考
+Distilled from all 37 Q-SYS Developer Help PDFs:
+- **Reserved Functions** (27-page spec): `GetProperties`, `RectifyProperties`, `GetPages`, `GetControls`, `GetControlLayout`, `GetComponents`, `GetPins`, `GetWiring`, `GetColor`, `GetPrettyName`
+- **Control Types**: Button (Toggle/Momentary/Trigger/StateTrigger), Knob (8 ControlUnit types), Indicator (Led/Meter/Text/Status), Text
+- **Layout & Graphics**: 10 Style types, 5 Graphics types (Label/GroupBox/Header/Image/Svg), ZOrder layering, 11 font families
+- **Properties**: 5 types (string/integer/double/boolean/enum), `IsHidden` dynamic visibility
+- **Embedded Components**: `GetComponents` + `GetPins` + `GetWiring` for audio processing
+- **Plugin Compiler**: 9-file framework, VS Code + Git workflow
+
+### 2. Code Style / 代码风格
+- PascalCase for controls/functions/globals; camelCase for locals
+- 2-space indentation, one statement per line
+- Design-time vs Runtime organization (`if Controls then`)
+- Socket events must print to debug window
+
+### 3. Critical Rules (Non-Negotiable) / 关键规则（必须遵守）
+| Rule / 规则 | Why / 原因 |
+|-------------|-----------|
+| `ButtonType="Trigger"` EventHandler must fire unconditionally | `c.Boolean` is `false` at callback time (pulse already reset) |
+| Knob must set `ControlUnit` (e.g. `"Integer"`) | No external pin generated without it |
+| `ButtonStyle` only affects panel appearance | Does NOT control pin type — use `ButtonType` for pins |
+| Count>1 layout name = `"Name 1"` (with space) | Not `"Name1"` — causes `GetAllControlPanels` error |
+| Delete & re-drag component after changing `*_count` | Pins don't regenerate automatically |
+| Watchdog uses `os.time()`, not `os.clock()` | `os.clock()` is CPU time, unreliable on Q-SYS Core |
+| Panel boxes: bigger is better, leave margins | Avoid clipping/overflow issues |
+| Every plugin needs bilingual Notes at bottom / 每个插件底部必须有中英文 Notes | House standard for `wxl_personal_plug` |
+
+### 4. Verified Pitfalls / 实践验证陷阱
+10+ real bugs encountered and solved:
+- `GetAllControlPanels: <name> not defined` — layout/control name mismatch
+- `unexpected symbol near ')'` — extra `)` in layout assignment
+- Trigger inputs not firing — `if c.Boolean then` guard blocks all triggers
+- Knob pins missing — missing `ControlUnit`
+- Fake TCP connection after Crestron reboot — two-level watchdog needed
+- `Too many Telnet connections` — multiple plugin instances
+
+### 5. Development Workflow / 开发工作流
+1. **Requirements gathering** — list I/O pins, properties, pages, behavior, confirm with user
+2. **Author qplug** — single-file structure in official order
+3. **Archive** — copy to `Q-Sys Designer\Plugins\`
+4. **Test** — drag into Q-SYS Designer, verify pins, panel, runtime logs
+5. **Publish** — independent GitHub repo per module, bilingual README
+
+### 6. House Standards / 系列规范
+- Category: `wxl_personal_plug~PluginName`
+- Author: `longwang`
+- Panel text: English only (compatibility)
+- Notes: bilingual (English + Chinese)
+- GitHub: one repo per plugin, bilingual README
+- Coordinates: panel width ~340px, ≥8px margins, ≥4px element spacing
+
+## How to Install / 如何安装
+
+Copy the `skill/` folder to your agent's user skills directory:
+
+```
+<agent-workspace>/.user_skills/qsc-qplug-dev/
+├── SKILL.md
+└── references/qplug-standards.md
+```
+
+The skill auto-triggers when you ask to create, edit, or debug any `.qplug` file.
+
+## How to Use / 如何使用
+
+Once installed, simply describe what plugin you need:
+
+> "做一个新的 qplug，输入 3 个 toggle，输出 3 个 toggle，当输入变化时同步输出"
+
+The agent will automatically:
+- Follow official API conventions (correct ButtonType, ControlUnit, PinStyle)
+- Apply house style (English panel text, bilingual Notes, proper margins)
+- Avoid known pitfalls (Trigger Boolean issue, Knob pin issue)
+- Output a complete, testable `.qplug` file
+- Archive to your Plugins folder
+- Offer GitHub publishing with bilingual README
+
+## Version / 版本
+
+- **Skill version**: 1.0.0
+- **Based on**: Q-SYS Developer Help (37 documents, 2026)
+- **Author**: longwang
+- **Part of**: wxl_personal_plug series
+
+---
+
 ## Author / 作者
 
 **longwang** — wxl_personal_plug series
