@@ -6,7 +6,7 @@
 
 PluginInfo = {
   Name = "wxl_personal_plug~crestronCIP",
-  Version = "1.1.2",
+  Version = "1.1.3",
   Author = "longwang",
   Id = "b7e8a2c1-3d4f-4a6e-9c2d-8f1e5b7a3c9d",
   Description = "Crestron CIP protocol gateway with configurable signal counts"
@@ -70,7 +70,7 @@ function GetProperties()
   table.insert(props, {
     Name = "cip_ip",
     Type = "string",
-    Value = "192.168.1.100"
+    Value = "192.168.27.224"
   })
 
   -- Device IPID (hex string, 03-FF)
@@ -83,28 +83,28 @@ function GetProperties()
   -- Digital signal count
   table.insert(props, {
     Name = "digital_count",
-    Type = "double",
+    Type = "integer",
     Min = 0,
     Max = 500,
-    Value = 32
+    Value = 100
   })
 
   -- Analog signal count
   table.insert(props, {
     Name = "analog_count",
-    Type = "double",
+    Type = "integer",
     Min = 0,
     Max = 500,
-    Value = 32
+    Value = 100
   })
 
   -- Serial signal count
   table.insert(props, {
     Name = "serial_count",
-    Type = "double",
+    Type = "integer",
     Min = 0,
     Max = 500,
-    Value = 32
+    Value = 100
   })
 
   -- Digital output pulse width (seconds) for trigger reliability
@@ -119,8 +119,8 @@ function GetProperties()
   -- Auto reconnect on disconnect
   table.insert(props, {
     Name = "auto_reconnect",
-    Type = "string",
-    Value = "true"
+    Type = "boolean",
+    Value = true
   })
 
   -- Reconnect interval (seconds)
@@ -136,6 +136,30 @@ function GetProperties()
 end
 
 function RectifyProperties(props)
+  -- Clamp counts to valid range
+  for _, name in ipairs({"digital_count", "analog_count", "serial_count"}) do
+    if props[name] then
+      local v = math.floor(tonumber(props[name].Value) or 32)
+      props[name].Value = math.min(math.max(v, 0), 500)
+    end
+  end
+  -- Clamp pulse width
+  if props["digital_pulse_width"] then
+    local v = tonumber(props["digital_pulse_width"].Value) or 0.3
+    props["digital_pulse_width"].Value = math.min(math.max(v, 0.1), 2.0)
+  end
+  -- Clamp reconnect interval
+  if props["reconnect_interval"] then
+    local v = tonumber(props["reconnect_interval"].Value) or 5
+    props["reconnect_interval"].Value = math.min(math.max(v, 1), 60)
+  end
+  -- Validate IPID hex (03-FF)
+  if props["cip_ipid"] then
+    local val = tonumber(props["cip_ipid"].Value, 16)
+    if not val or val < 0x03 or val > 0xFF then
+      props["cip_ipid"].Value = "03"
+    end
+  end
   return props
 end
 
@@ -218,7 +242,8 @@ function GetControls(props)
   table.insert(ctrls, {
     Name = "monitor_clear",
     ControlType = "Button",
-    ButtonStyle = "Trigger",
+    ButtonType = "Trigger",
+    DefaultValue = false,
     UserPin = false,
     Count = 1
   })
@@ -467,6 +492,38 @@ function GetControlLayout(props)
 
       y = y + rowH
     end
+
+    -- Notes (bilingual) at bottom of each signal page
+    local noteY = y + 8
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Text = "Notes / 说明",
+      FontSize = fs,
+      HTextAlign = "Left",
+      Fill = Palette.White,
+      StrokeColor = Palette.Black,
+      StrokeWidth = 1,
+      CornerRadius = 6,
+      Position = {8, noteY},
+      Size = {324, 80}
+    })
+    local function sNote(text)
+      table.insert(graphics, {
+        Type = "Text",
+        Text = text,
+        FontSize = 8,
+        HTextAlign = "Left",
+        Position = {14, noteY + 16},
+        Size = {312, 12}
+      })
+      noteY = noteY + 12
+    end
+    sNote(signalType .. " In N: Crestron->QSC, received from processor.")
+    sNote(signalType .. " In N: Crestron->QSC，从中控接收。")
+    sNote(signalType .. " Out N: QSC->Crestron, sent to processor.")
+    sNote(signalType .. " Out N: QSC->Crestron，发送给中控。")
+    sNote("Digital Out pulses are stretched to digital_pulse_width (default 0.3s).")
+    sNote("Digital Out 脉冲被拉伸至 digital_pulse_width（默认0.3秒）。")
   end
 
   if CurrentPage.ptype == "connection" then
@@ -551,12 +608,10 @@ function GetControlLayout(props)
     layout["CIP_Status"] = {
       PrettyName = "Connection Status",
       Legend = "",
-      Style = "Button",
-      ButtonStyle = "Toggle",
+      Style = "Led",
       Color = Palette.Green,
-      Margin = 2,
       Position = {172, 92},
-      Size = {40, 26}
+      Size = {28, 26}
     }
 
     -- Config info
@@ -598,7 +653,7 @@ function GetControlLayout(props)
       noteY = noteY + noteLine
     end
 
-    addNote("Crestron CIP Gateway v1.1.2 / Crestron CIP 协议网关")
+    addNote("Crestron CIP Gateway v1.1.3 / Crestron CIP 协议网关")
     addNote("TCP port 41794, connects Q-SYS Core to Crestron processor via CIP.")
     addNote("TCP 端口 41794，通过 CIP 协议连接 Q-SYS Core 与 Crestron 中控。")
     addNote("")
@@ -648,8 +703,13 @@ function GetControlLayout(props)
     addNote("        Level2: 注册后15秒无信号 -> 假CIP会话强制重连")
     addNote("        digital pulse stretching, analog value display")
     addNote("        数字量脉冲拉伸、模拟量数值显示")
+    addNote("v1.1.3: fix forceReconnect forward ref, monitor fs nil, double connect")
+    addNote("v1.1.3: 修复forceReconnect前向引用、monitor页fs未定义、启动重复连接")
+    addNote("        boolean/integer property types, Led status, RectifyProperties validation")
+    addNote("        属性改用boolean/integer类型、状态灯改用Led、属性校验钳制")
 
   elseif CurrentPage.ptype == "monitor" then
+    local fs = 12
     -- Title
     table.insert(graphics, {
       Type = "Text",
@@ -738,6 +798,8 @@ end
 
 --==============================================================================
 -- Runtime logic (executes on Core)
+-- v1.1.3: fix forceReconnect forward ref, monitor fs nil, double connect on startup
+--         boolean/integer property types, Led status indicator, RectifyProperties
 -- v1.1.2: os.time() watchdog, post-reg signal check, forceReconnect()
 -- v1.1.1: Watchdog timeout (30s no data -> force reconnect)
 -- v1.1.0: Auto-reconnect, 0x03/0x0F/0x0D handling, multi-subpacket parse,
@@ -816,8 +878,7 @@ if Controls then
   end
 
   local function isAutoReconnect()
-    local v = Properties["auto_reconnect"].Value
-    return v == "true" or v == "True" or v == "1"
+    return Properties["auto_reconnect"].Value == true
   end
 
   local function getTargetIP()
@@ -828,11 +889,15 @@ if Controls then
   end
 
   local function getTargetIPID()
+    local val
     if Controls.IPID_Input ~= nil and Controls.IPID_Input.String ~= "" then
-      local val = tonumber(Controls.IPID_Input.String, 16)
-      if val then return val end
+      val = tonumber(Controls.IPID_Input.String, 16)
     end
-    return tonumber(Properties["cip_ipid"].Value, 16) or 3
+    if not val then
+      val = tonumber(Properties["cip_ipid"].Value, 16) or 3
+    end
+    -- Clamp to valid IPID range 0x03-0xFF
+    return math.min(math.max(val, 0x03), 0xFF)
   end
 
   local function toHex(str)
@@ -997,6 +1062,8 @@ if Controls then
   end
 
   -- === Parse full CIP packet ===
+  -- Forward declaration: forceReconnect is defined later but called from parsePacket
+  local forceReconnect
   local function parsePacket(pkt)
     if #pkt < 4 then return end
     local typ = pkt:byte(1)
@@ -1183,7 +1250,7 @@ if Controls then
   end
 
   -- Force reconnect: cleanly tear down and schedule reconnect (NOT user-initiated)
-  local function forceReconnect(reason)
+  forceReconnect = function(reason)
     print("[CIP] Force reconnect: " .. reason)
     addLog("TCP", "Event", "Force reconnect: " .. reason)
     if tcp then
@@ -1330,15 +1397,16 @@ if Controls then
   end
 
   print("==================================")
-  print("crestronCIP gateway v1.1.2 started")
+  print("crestronCIP gateway v1.1.3 started")
   print("Digital: " .. MAX_DIGITAL .. " | Analog: " .. MAX_ANALOG .. " | Serial: " .. MAX_SERIAL)
   print("Pulse: " .. getPulseWidth() .. "s | Auto-reconnect: " .. tostring(isAutoReconnect()) ..
         " (" .. getReconnectInterval() .. "s)")
   print("IPID: 0x" .. string.format("%02X", getTargetIPID()))
   print("==================================")
 
-  -- Default: auto-connect on startup (no manual Connect click needed)
-  -- Set CIP_Connect to ON and connect immediately
+  -- Default: auto-connect on startup. Set Connect toggle ON for visual feedback,
+  -- then call doConnect() explicitly. Programmatic Boolean changes during init
+  -- may not fire EventHandler reliably, so explicit call is required.
   if Controls.CIP_Connect then
     Controls.CIP_Connect.Boolean = true
   end
